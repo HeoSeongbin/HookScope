@@ -1,0 +1,19 @@
+# Phase 1·2 검증
+
+## 자동화
+1. Vitest/Supertest: 관리 인증, 생성 토큰, JSON 원본 바이트, 중복 Query, 비밀 헤더 마스킹, malformed JSON, GET/PUT/PATCH/DELETE, 256KiB 초과, DB 실패, 토큰/메서드 거부, 입력 검증, live/ready, Text/Form/Binary 파싱, 중복 헤더 및 프로토타입 키.
+2. PostgreSQL smoke: 독립 HTTP 서버→Endpoint 생성→한국어 JSON 수신→DB 직접 원본 바이트 및 중복 query 비교→목록/상세→미인증 거부→테스트 데이터 CASCADE 정리.
+3. Playwright: Compose 프론트 접속→키 입력→Endpoint 생성→실제 HTTP POST→수동 목록 갱신→Body/Headers/Query/Raw 확인→데스크톱/모바일 스크린샷 및 가로 넘침 확인.
+
+## 수동 재현
+Docker Desktop 실행 후 README의 Compose 명령으로 전체 서비스를 올린다. 모든 서비스 healthy를 확인한다. 관리 화면에서 Endpoint를 만들고 docs/curl-sample.json을 curl.exe로 전송한다. 응답 200 및 requestId를 확인한 다음 화면 새로고침 후 목록/본문을 확인한다.
+
+## Phase 2 추가 검증
+1. 실제 Socket 클라이언트: 비어 있는/잘못된 키/공개 수신 토큰 인증 거부, 허용되지 않은 WebSocket Origin 거부.
+2. 인증 후 UUID/Endpoint 존재 확인, DB 조회 실패 시 구독 오류, Endpoint Room 격리, 두 탭 전달, 이전 Room 이탈 및 disconnect 정리.
+3. 지연된 DB 저장 Promise 완료 전 알림이 없음을 확인. 저장 실패 시 알림이 없고, 알림 발행 예외가 저장 성공 응답을 바꾸지 않음을 확인.
+4. 브라우저 알림 게이트 단위 테스트: 중복·잘못된 이벤트·다른 Endpoint 거부, 메모리 제한 및 구독별 초기화.
+5. 실제 PostgreSQL smoke: 저장 행과 Socket 이벤트의 Request ID, Endpoint ID, receivedAt 일치 확인.
+6. Compose E2E: 새로고침 없이 두 탭에 표시, 실제 WebSocket 알림 프레임만 재전달해 REST 중복 조회가 없음을 확인, 한 탭 연결을 끊고 HTTP 접수 후 재연결하여 요청 복구. 모바일 화면 및 로그아웃 확인.
+
+Replay·외부 전송·계정별 소유권·TTL·부하·멀티 인스턴스 검증은 후속 Phase 대상이며 통과 처리하지 않는다.

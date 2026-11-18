@@ -1,0 +1,13 @@
+import {createApp} from './app.js';
+import {repository} from './repository.js';
+import {pool} from './db.js';
+import {createServer} from 'node:http';
+import {attachRealtime} from './realtime.js';
+const key=process.env.ADMIN_KEY??'';
+const origin=process.env.FRONTEND_ORIGIN??'http://localhost:5173';
+const app=createApp(repository,key,origin,event=>realtime.publish(event));
+const server=createServer(app);
+const realtime=attachRealtime(server,repository,key,origin);
+server.listen(Number(process.env.PORT??3000),'0.0.0.0');
+server.requestTimeout=15000;server.headersTimeout=10000;
+for(const signal of ['SIGTERM','SIGINT']) process.on(signal,()=>{void realtime.io.close(()=>{void pool.end().then(()=>process.exit(0));});setTimeout(()=>process.exit(1),10000).unref();});

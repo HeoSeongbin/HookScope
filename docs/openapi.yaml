@@ -1,0 +1,99 @@
+openapi: 3.1.0
+info:
+  title: HookScope Phase 2 API
+  version: 0.2.0
+  description: REST contract unchanged from Phase 1. Authenticated Socket.IO protocol is documented in PROJECT.md.
+servers:
+  - url: http://localhost:8088
+security:
+  - AdminKey: []
+paths:
+  /api/v1/endpoints:
+    get:
+      summary: List endpoints
+      responses:
+        '200': {description: 'Object containing items array'}
+        '401': {description: Unauthorized}
+    post:
+      summary: Create endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 80}
+      responses:
+        '201': {description: 'Endpoint with id, name, publicToken, enabled, createdAt'}
+        '400': {description: Invalid input}
+        '401': {description: Unauthorized}
+  /api/v1/endpoints/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      summary: Get endpoint
+      responses:
+        '200': {description: Endpoint}
+        '404': {description: Not found}
+  /api/v1/endpoints/{id}/requests:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      summary: List captures newest first
+      parameters:
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 10000, default: 1}
+      responses:
+        '200': {description: 'items, total, page, pageSize (30)'}
+        '404': {description: Endpoint not found}
+  /api/v1/requests/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      summary: Inspect stored request
+      responses:
+        '200': {description: 'Capture including masked header pairs, duplicate query arrays, parsedBody, parseError, rawBody (Base64), rawEncoding'}
+        '404': {description: Not found}
+  /h/{publicToken}:
+    parameters:
+      - name: publicToken
+        in: path
+        required: true
+        schema: {type: string}
+    post: &ingestion
+      security: []
+      summary: Record a webhook (max 256 KiB, compression unsupported)
+      responses:
+        '200': {description: 'Recorded: requestId and message'}
+        '404': {description: Unknown or disabled endpoint}
+        '413': {description: Body too large}
+        '415': {description: Unsupported content encoding}
+        '429': {description: Rate limit exceeded}
+        '503': {description: Storage unavailable}
+    get: *ingestion
+    put: *ingestion
+    patch: *ingestion
+    delete: *ingestion
+  /health/live:
+    get:
+      security: []
+      responses:
+        '200': {description: Process alive}
+  /health/ready:
+    get:
+      security: []
+      responses:
+        '200': {description: Request table reachable}
+        '503': {description: Database not ready}
+components:
+  securitySchemes:
+    AdminKey: {type: http, scheme: bearer}
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
