@@ -9,7 +9,8 @@
     "start": "node dist/server.js",
     "migrate": "tsx src/migrate.ts",
     "test": "vitest run",
-    "smoke": "tsx src/smoke.ts"
+    "smoke": "tsx src/smoke.ts",
+    "smoke:filters": "tsx src/filterSmoke.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

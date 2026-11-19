@@ -1,4 +1,4 @@
-# Phase 1·2 검증
+# Phase 1–3 검증
 
 ## 자동화
 1. Vitest/Supertest: 관리 인증, 생성 토큰, JSON 원본 바이트, 중복 Query, 비밀 헤더 마스킹, malformed JSON, GET/PUT/PATCH/DELETE, 256KiB 초과, DB 실패, 토큰/메서드 거부, 입력 검증, live/ready, Text/Form/Binary 파싱, 중복 헤더 및 프로토타입 키.
@@ -15,5 +15,13 @@ Docker Desktop 실행 후 README의 Compose 명령으로 전체 서비스를 올
 4. 브라우저 알림 게이트 단위 테스트: 중복·잘못된 이벤트·다른 Endpoint 거부, 메모리 제한 및 구독별 초기화.
 5. 실제 PostgreSQL smoke: 저장 행과 Socket 이벤트의 Request ID, Endpoint ID, receivedAt 일치 확인.
 6. Compose E2E: 새로고침 없이 두 탭에 표시, 실제 WebSocket 알림 프레임만 재전달해 REST 중복 조회가 없음을 확인, 한 탭 연결을 끊고 HTTP 접수 후 재연결하여 요청 복구. 모바일 화면 및 로그아웃 확인.
+
+## Phase 3 추가 검증
+1. Query 스키마: page/method/status/MIME/날짜/정렬/q 길이·NUL·중복/알 수 없는 키 및 역전 시간 범위. 인증 없이 검색 API에 접근할 수 없으며 Endpoint ID와 검증된 조건을 Repository로 전달.
+2. Inspector 단위 테스트: 시간대 직렬화, Header/Query 중복 및 프로토타입 유사 키, binary Base64 바이트 복원, 비파괴 JSON 마스킹.
+3. 실제 PostgreSQL `smoke:filters`: Endpoint 두 개에 HTTP 요청 36건 수신. 35건 Endpoint를 30/5로 조회하고 누락/중복·본문 미포함·다른 Endpoint 격리를 확인. Method+Status+MIME 조합, 한국어/리터럴 %_ 및 SQL 문법 검색, Header/Query 검색, 정렬 양방향, UTC·offset 기간 및 binary 바이트 확인. 자체 데이터를 삭제.
+4. Compose E2E: 필터 적용 중 제외 Method 요청이 표시되지 않고 일치 요청은 실시간 추가됨. JSON Tree 펼치기/마스킹, 헤더 검색·클립보드 내용, 중복 Query 행, 모바일 가로 넘침과 binary 다운로드 바이트 확인.
+5. Compose E2E: HTTP 31건으로 30/1 페이지·오래된순·필터 적용 시 1페이지 복귀·Status 500 빈 결과·과거 날짜·조건 초기화 확인.
+6. Compose E2E: Form 중복 키 및 HTML 안전한 텍스트 표시, Buffer로 전송한 malformed JSON의 오류와 Raw 내용, Text의 script 문자열 비실행 확인.
 
 Replay·외부 전송·계정별 소유권·TTL·부하·멀티 인스턴스 검증은 후속 Phase 대상이며 통과 처리하지 않는다.

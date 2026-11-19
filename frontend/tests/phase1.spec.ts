@@ -18,9 +18,9 @@ test('create endpoint, capture real HTTP, inspect headers and raw body',async({p
  await page.locator('.request').click();
  await expect(page.locator('pre')).toContainText('phase1.verified');
  await page.getByRole('button',{name:'Headers',exact:true}).click();
- await expect(page.locator('pre')).toContainText('browser');
+ await expect(page.locator('.kv-list')).toContainText('browser');
  await page.getByRole('button',{name:'Query',exact:true}).click();
- await expect(page.locator('pre')).toContainText('playwright');
+ await expect(page.locator('.kv-list')).toContainText('playwright');
  await page.getByRole('button',{name:'Raw',exact:true}).click();
  await expect(page.locator('pre')).toContainText('{ "event":');
  await page.getByRole('button',{name:'Body',exact:true}).click();

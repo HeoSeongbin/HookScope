@@ -3,7 +3,7 @@
 Webhook Testing & Monitoring Platform. 실제 HTTP 요청을 수신하고 PostgreSQL에 영속 저장하여 개발자가 내용을 분석하는 포트폴리오 프로젝트다.
 
 ## 이번 범위
-최초 실행은 Phase 0 설계와 Phase 1 기본 수신·조회를 구현했다. 이번 후속 작업은 Phase 2의 Socket.IO 인증·Endpoint Room·실시간 알림·재연결 REST 동기화만 구현한다. 검색·필터·Replay 등 Phase 3 이후 기능은 이번 범위에 포함하지 않는다.
+Phase 0–2의 설계·수신·저장·실시간 모니터를 유지한다. 이번 작업은 Phase 3의 요청 검색·필터·페이지네이션 및 상세 분석 화면을 구현한다. Custom Response, Test Sender, Replay 등 Phase 4 이후 기능은 포함하지 않는다.
 
 ## 기술 스택
 Node.js 24 LTS, TypeScript strict, Express 5, Drizzle ORM 및 node-postgres, PostgreSQL 17, Zod, Pino, React 19, Vite 8, Vitest 5, Supertest. 실제 설치 버전은 package-lock.json이 기준이다. Redis 7은 향후 큐용으로 Compose에 준비하되 Phase 1 수신 경로에서는 사용하지 않는다.
@@ -21,7 +21,7 @@ webhook_requests: UUID PK, Endpoint FK CASCADE, method, 토큰이 제거된 path
 
 ## API
 POST/GET /api/v1/endpoints, GET /api/v1/endpoints/:id,
-GET /api/v1/endpoints/:id/requests?page=1 (30건), GET /api/v1/requests/:id.
+GET /api/v1/endpoints/:id/requests?page=1 (30건, Phase 3 필터 계약 참조), GET /api/v1/requests/:id.
 GET/POST/PUT/PATCH/DELETE /h/:publicToken. HEAD는 405. OPTIONS는 CORS 사전 확인 204이며 저장하지 않는다.
 GET /health/live, /health/ready. 오류는 {error:{code}} 규약.
 상세 API는 rawEncoding: base64를 제공한다. JSONB의 객체 키 순서는 원본 보증 대상이 아니므로 서명 검증에는 rawBody만 사용한다.
@@ -34,7 +34,7 @@ GET /health/live, /health/ready. 오류는 {error:{code}} 규약.
 보관 자동 정리·전체 저장량 한도는 Phase 7로 예정. Phase 1 데이터는 수동 삭제 전까지 유지되므로 로컬 개발에서만 사용한다. 공개 서비스 준비 완료로 간주하지 않는다.
 
 ## 향후 Phase 및 최종 조건
-2: Socket.IO 인증 Room·재연결 REST 동기화(이번 구현). 3: 검색·필터·JSON Tree. 4: 응답 설정·자체 Test Sender. 5: BullMQ Internal Replay·시도 기록·백오프. 6: 실제 DB 기반 통계. 7: 사용자별 권한·만료·보관·감사. 8: 테마·접근성·성능. 9: E2E·공개 포트폴리오 문서 및 시연.
+2: Socket.IO 인증 Room·재연결 REST 동기화. 3: 검색·필터·JSON Tree(이번 구현). 4: 응답 설정·자체 Test Sender. 5: BullMQ Internal Replay·시도 기록·백오프. 6: 실제 DB 기반 통계. 7: 사용자별 권한·만료·보관·감사. 8: 테마·접근성·성능. 9: E2E·공개 포트폴리오 문서 및 시연.
 Replay는 PostgreSQL 작업/시도 이력과 멱등성 제약을 함께 설계하며 Job ID만 신뢰하지 않는다. 외부 전송은 허용 목록, DNS/IP 검증, redirect 금지, timeout 및 응답 크기 제한 후 별도 제공한다.
 Socket.IO는 DB 저장 이후 식별자 이벤트만 발행하고 REST 재조회가 정합성의 기준이 된다. 멀티 인스턴스에서는 Redis adapter와 공유 rate limiter가 필요하다.
 최종 완료는 사용자 원문 28절의 전체 기능 및 테스트 조건을 충족한 시점이며, 현재는 최초 Phase 검증만 평가한다.
@@ -49,3 +49,12 @@ Socket.IO는 DB 저장 이후 식별자 이벤트만 발행하고 REST 재조회
 - 클라이언트는 최초 연결 및 재연결마다 Room 가입 ack 뒤 현재 페이지를 REST로 재조회한다. 알림은 75ms 단위로 합쳐 재조회하고 최근 512개 Request ID의 중복 이벤트를 무시한다. 페이지는 API 결과로 교체하므로 오래된 중복 알림도 목록을 중복 삽입하지 않는다.
 - Endpoint 변경·로그아웃에서 Socket/리스너/타이머를 정리한다. 오래된 REST 응답은 세대 번호로 무시한다. 다중 탭은 각자 인증·구독·재동기화한다.
 - 이벤트는 영속 메시지 큐가 아니다. 연결 중 드물게 알림이 유실되면 수동 갱신·탭 복귀·다음 알림 또는 재연결 재조회로 복구한다. Exactly-once, 멀티 인스턴스 및 Redis adapter는 이번에 보장하지 않는다.
+
+## Phase 3 요청 조회 계약
+- query: page(1–10000, 기본 1), method(GET/POST/PUT/PATCH/DELETE), status(100–599), contentType(MIME type, 매개변수 제외), from/to(명시적 시간대 포함 ISO 8601, 양 끝 포함), q(최대 200자), sort(newest/oldest, 기본 newest). 중복·알 수 없는 query key 및 잘못된 범위는 400.
+- 조건은 모두 AND로 조합하며 Endpoint ID 조건을 항상 유지한다. Content-Type은 소문자 미디어 타입으로 비교한다. q는 Request ID·Parsed Body·마스킹된 Headers·Query·Content-Type의 대소문자 구분 없는 리터럴 부분 문자열이다. %, _ 및 SQL 문법을 패턴으로 해석하지 않으며 파라미터 바인딩을 사용한다.
+- q는 원본 Base64/파싱 실패 본문/binary 본문을 검색하지 않는다. Raw Body는 상세 조회와 다운로드로 확인한다. 검색은 전체 텍스트 인덱스 없이 해당 Endpoint 범위를 스캔하므로 대량 검색 성능은 후속 검토 대상이다.
+- 목록(본문 제외, 최대 30건)과 total은 REPEATABLE READ 읽기 전용 트랜잭션의 동일 스냅샷에서 조회한다. receivedAt와 UUID의 동일 방향 정렬로 같은 시각의 순서를 고정한다. 페이지 사이의 동시 수신에 의한 offset 이동은 가능하며 페이지 전체의 영속 스냅샷은 제공하지 않는다.
+- UI에서 날짜는 현지 시각으로 입력하고 UTC로 변환한다. 적용/초기화는 첫 페이지로 이동하며 실시간·재연결 재조회는 적용된 필터·정렬·현재 페이지를 유지한다. total은 필터 적용 건수다. 더 이상 존재하지 않는 페이지는 마지막 유효 페이지로 보정한다.
+- Inspector: 헤더 이름/값 검색 및 개별·전체 복사, 중복 Query 값별 행, JSON Pretty/Tree, Text/Form, Binary Metadata, Raw UTF-8 또는 Base64 미리보기, 원본 .bin 다운로드. 다운로드는 Base64를 바이트로 디코딩할 뿐 텍스트로 재인코딩하지 않는다.
+- JSON 표시·복사는 민감 키(password/token/secret 등)를 기본 마스킹하고 해제할 수 있다. 이는 표시용 휴리스틱이며 저장·검색·Raw/다운로드는 원본 그대로다. Tree는 펼친 노드만 렌더링하고 분기당 100개씩, 최대 32단계로 표시한다. HTML은 텍스트로만 렌더링한다.

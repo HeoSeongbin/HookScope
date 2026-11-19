@@ -1,9 +1,35 @@
-# 개발 상태 — 2026-11-18
+# 개발 상태 — 2026-11-19
 
 ## 현재 Phase
-**Phase 0–2 구현·검증 완료. 다음 미완료 단계는 Phase 3이다.** 로컬 개발용 단일 관리자 MVP이며 공개 운영 준비 완료를 의미하지 않는다. 아래 Phase 1 기록은 유지하고 이번 검증을 별도 기록한다.
+**Phase 0–3 구현·검증 완료. 다음 미완료 단계는 Phase 4이다.** 로컬 개발용 단일 관리자 MVP이며 공개 운영 준비 완료를 의미하지 않는다. Phase 1·2의 과거 검증 결과는 이력으로 유지한다.
 
-## Phase 2 구현 및 검증 (이번 작업)
+## Phase 3 구현 및 검증 (2026-11-19)
+- 필수 문서·소스·Git 상태 비교: main은 origin/main과 같고 작업 전 변경사항이 없었다(기준 커밋 cbb53ab). 문서에 남은 Git 미초기화 기록은 Phase 1·2 당시 이력이다. 이번 변경은 로컬 작업 폴더에 있으며 커밋·푸시는 수행하지 않았다.
+- Endpoint 범위 키워드·Method·Status·Content-Type·수신 기간·정렬 필터 및 엄격한 query 검증 추가. 기존 관리자 인증·수신·저장·Socket 경계 유지. 새 의존성 및 DB migration 없음.
+- 목록과 total을 REPEATABLE READ 읽기 전용 스냅샷으로 조회, receivedAt/UUID 안정 정렬, 본문 없는 30건 페이지. 검색 값은 바인딩하고 %/_는 리터럴로 처리.
+- 검색 초안/적용값 분리, 첫 페이지 복귀·초기화, 적용 필터를 유지한 실시간·재연결 재조회, 로그아웃 필터 초기화.
+- 헤더 검색·개별/전체 복사, 중복 Query 행, JSON Pretty/Tree·민감 키 표시 마스킹, Text/Form/Binary 분석, Raw UTF-8/Base64 및 원본 .bin 다운로드.
+- **Vitest 45/45 통과:** 기존 26개 + query/인증 경계/Inspector 데이터 처리 19개. Repository 더블과 파서 테스트이며 실제 DB 검증은 아래 smoke로 구분한다.
+- **기존 실제 PostgreSQL+Socket smoke 통과:** 원본 바이트·중복 Query·DB ID/시각과 Room 알림·REST/인증 회귀 확인.
+- **실제 PostgreSQL filter smoke 통과:** HTTP 36건 수신, Endpoint 격리, 복합 필터, 한국어/%_/SQL 문법 리터럴 검색, Header/Query 검색, 날짜/offset 범위, 정렬 반전, 30/5 페이지·중복 없음·본문 미포함 및 binary 바이트 검증. 테스트 데이터 자동 정리.
+- **Compose Playwright 5/5 통과:** 기존 2개 + 필터 유지 실시간 갱신/트리/마스킹/복사/다운로드, 31건 페이지·Status/기간, Form 중복·malformed JSON·Text/HTML 비실행 3개.
+- TypeScript 검사·ESLint·Production Build 통과. Compose 재빌드·기동 성공, PostgreSQL/Redis/backend/frontend 모두 healthy 확인. 데스크톱·390px 모바일 스크린샷 생성 및 시각 검토 완료.
+- 2026-11-19 레지스트리 응답 기준 `npm audit` 전체와 `--omit=dev` 모두 0건. Phase 2 당시 High 11건과 구분하여 기록하며, 의존성을 강제 다운그레이드하거나 새로 추가하지 않았다.
+- 원격 CI·공개 배포·대량 검색/부하·모든 네트워크 장애 유형은 미검증. 검색은 Parsed Body·마스킹 Header·Query·ID·Content-Type만 포함하며 Raw/Base64와 파싱 실패 본문은 검색하지 않는다. 페이지 간 offset 이동은 가능하다.
+
+## Phase 3에서 해결한 문제
+- Docker 엔진이 종료된 상태여서 최초 Compose 검증이 실패했다. Docker Desktop 시작 후 재빌드·실제 DB 및 E2E 검증을 완료했다.
+- 기존 E2E가 Header/Query의 pre 요소를 찾고 있어 새 구조화 표의 행/값을 검사하도록 갱신했다.
+- Playwright가 JSON Content-Type의 잘못된 문자열을 유효한 JSON 문자열로 인코딩한 점을 발견했다. malformed JSON을 Buffer 원본 바이트로 전송하도록 수정해 실제 파싱 실패·Raw 보존을 검증했다.
+- 적용 필터와 재연결 조회가 달라지거나 로그아웃 후 이전 필터가 남지 않도록 최신 콜백·조회 세대와 초기화를 유지했다.
+
+## Phase 3 변경 파일
+- backend/src/requestFilters.ts, filterSmoke.ts, tests/requestFilters.test.ts 신규; src/app.ts, repository.ts, package.json 수정.
+- frontend/src/RequestFilters.tsx, RequestInspector.tsx, JsonTree.tsx, inspectorData.ts, types.ts 및 tests/phase3.spec.ts 신규; src/main.tsx, style.css, tests/phase1.spec.ts 수정.
+- .github/workflows/ci.yml에 DB filter smoke 추가. PROJECT.md, README.md, docs/PROGRESS.md, DECISIONS.md, ARCHITECTURE.md, TEST-SCENARIOS.md, openapi.yaml 갱신.
+- docs/screenshots/phase3-desktop.png, phase3-mobile.png 신규. 기존 E2E 실행으로 Phase 1·2 스크린샷도 현재 UI로 재생성됨.
+
+## Phase 2 구현 및 검증 (2026-11-18 이력)
 - 시작 시 필수 문서·실제 코드·Git 상태를 비교. Git 저장소 미초기화 상태를 재확인했고 기존 테스트 17개와 실행 중인 Compose의 healthy 상태를 확인했다.
 - Socket.IO 4.8.4 서버·클라이언트, 공통 관리자 키 검증, Origin 검사, UUID/Endpoint 존재 확인 및 인증된 Endpoint Room 구현.
 - DB 저장 완료 후 PublishReceived 경계로 메타데이터 알림 발행. 수신·저장·Socket 모듈 분리. 발행 실패와 영속 저장 실패를 구분. DB 스키마 변경 없음.
@@ -22,7 +48,7 @@
 - 기존 모바일 CSS가 로그아웃 버튼을 숨겨 E2E 종료 단계가 실패했다. 모바일에서도 로그아웃 버튼을 제공하도록 수정하고 전체 E2E 2개를 재실행해 통과했다.
 - 실시간 재조회와 Endpoint 선택/로그아웃의 응답 경쟁 가능성을 세대 번호 검사로 방지했다.
 
-## 이번 변경 파일
+## Phase 2 당시 변경 파일
 - backend/src/auth.ts, realtime.ts 신규; app.ts, server.ts, smoke.ts 수정; backend/tests/realtime.test.ts, realtimeEvents.test.ts 신규; backend/package.json 수정.
 - frontend/src/useRealtime.ts, realtimeEvents.ts 신규; main.tsx, style.css, vite.config.ts, package.json 수정; frontend/tests/phase2.spec.ts 신규.
 - package.json, package-lock.json, eslint.config.mjs, .github/workflows/ci.yml, docker/nginx.conf.
@@ -60,16 +86,16 @@
 6. Nginx access log의 공개 수신 토큰 노출 가능성: 기본 access logging 비활성화.
 
 ## 미완료 및 제약
-- Phase 3 이후 검색/필터, JSON Tree, Custom Response, Test Sender, Replay/Worker, 통계, 다중 사용자 인증, 자동 보관·정리, 전체 용량 및 엔드포인트별 quota는 미구현.
+- Phase 4 이후 Custom Response, Test Sender, Replay/Worker, 통계, 다중 사용자 인증, 자동 보관·정리, 전체 용량 및 엔드포인트별 quota는 미구현.
 - 현재 본문·쿼리는 원문 보관. 자동 TTL 없이 수동 DB 정리 전까지 유지.
 - 응답 durationMs는 DB insert 전 준비 시간이고 실제 전체 처리시간이 아니다.
 - 대량 요청 부하 테스트·공개 배포·HTTPS·원격 CI는 미검증.
-- 폴더는 시작 시 Git 저장소가 아니었다. 원격 생성·배포·커밋은 수행하지 않았다.
+- 최초 폴더는 Git 저장소가 아니었으며 Phase 2 종료 후 사용자 요청으로 main 커밋 cbb53ab를 origin에 푸시했다. Phase 3 변경은 아직 커밋하지 않았다.
 
 ## 다음 작업
-Phase 3: Header 상세 검색/복사, Query 상세, JSON Tree Viewer, Raw Body 및 Request Inspector 개선, Method/시간/Content-Type 필터, 키워드 검색과 페이지네이션 UX. 기존 실시간 동기화와 필터 상태 간 정합성도 함께 검증한다.
+Phase 4: Custom Response Status/Body/Header/Delay 검증 및 안전한 응답 설정, 자체 Endpoint에 한정한 Test Sender, 응답 확인과 테스트 요청 이력 연결. 외부 임의 URL 전송이나 Replay는 포함하지 않는다.
 
 ## 실행 상태와 차단 요인
 로컬 관리 콘솔: http://localhost:8088. 관리자 키는 Git 제외된 루트 .env의 ADMIN_KEY. Compose 서비스는 실행 상태로 유지한다.
 테스트가 만든 Endpoint와 실제 요청은 로컬 DB에 남아 있으며 가짜 통계나 샘플 목록을 주입하지 않았다. smoke 자체 데이터는 자동 정리한다.
-Phase 2의 기능 검증 차단 요인은 없다. 개발 도구 advisory는 업데이트 추적이 필요하다. 이벤트 전달은 best effort이며 유실 시 REST 재조회가 기준이다. 현재 관리자 키를 공유한 사용자는 모든 Endpoint를 관리하며 계정별 소유권은 아직 없다.
+Phase 3의 기능 검증 차단 요인은 없다. 이벤트 전달은 best effort이며 유실 시 적용 필터의 REST 재조회가 기준이다. 현재 관리자 키를 공유한 사용자는 모든 Endpoint를 관리하며 계정별 소유권은 아직 없다. 원본 Body·Query 및 Raw 다운로드에는 민감값이 남는다.

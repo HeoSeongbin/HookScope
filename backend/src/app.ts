@@ -10,6 +10,7 @@ import {parseBody,pairs,maskedHeaders} from './body.js';
 import type {Repository} from './repository.js';
 import {validAdminKey} from './auth.js';
 import type {PublishReceived} from './realtime.js';
+import {requestFiltersSchema} from './requestFilters.js';
 const log=pino();
 export function createApp(repo:Repository,key:string,origin='http://localhost:5173',publish:PublishReceived=()=>{}) {
  if(key.length<32) throw new Error('ADMIN_KEY must contain at least 32 characters');
@@ -46,7 +47,7 @@ export function createApp(repo:Repository,key:string,origin='http://localhost:51
  api.get('/endpoints',async(_req,res)=>res.json({items:await repo.listEndpoints()}));
  api.post('/endpoints',async(req,res)=>{const {name}=z.object({name:z.string().trim().min(1).max(80)}).parse(req.body);res.status(201).json(await repo.createEndpoint(name,randomBytes(24).toString('hex')));});
  api.get('/endpoints/:id',async(req,res)=>{const item=await repo.endpoint(z.uuid().parse(req.params.id));if(!item){res.status(404).json({error:{code:'NOT_FOUND'}});return;}res.json(item);});
- api.get('/endpoints/:id/requests',async(req,res)=>{const id=z.uuid().parse(req.params.id);const page=z.coerce.number().int().min(1).max(10000).default(1).parse(req.query.page);if(!await repo.endpoint(id)){res.status(404).json({error:{code:'NOT_FOUND'}});return;}res.json(await repo.list(id,page));});
+ api.get('/endpoints/:id/requests',async(req,res)=>{const id=z.uuid().parse(req.params.id);const filters=requestFiltersSchema.parse(req.query);if(!await repo.endpoint(id)){res.status(404).json({error:{code:'NOT_FOUND'}});return;}res.json(await repo.list(id,filters));});
  api.get('/requests/:id',async(req,res)=>{const item=await repo.request(z.uuid().parse(req.params.id));if(!item){res.status(404).json({error:{code:'NOT_FOUND'}});return;}res.json({...item,rawEncoding:'base64'});});
  app.use('/api/v1',api);
  app.use((_req,res)=>res.status(404).json({error:{code:'NOT_FOUND'}}));
