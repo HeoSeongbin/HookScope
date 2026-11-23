@@ -1,0 +1,50 @@
+import assert from 'node:assert/strict';
+import {createServer} from 'node:http';
+import {once} from 'node:events';
+import {randomBytes} from 'node:crypto';
+import {eq,sql} from 'drizzle-orm';
+import {createApp} from './app.js';
+import {repository} from './repository.js';
+import {db,pool} from './db.js';
+import {endpoints,requests,responseConfigs} from './schema.js';
+import {createTestTransport} from './testSender.js';
+
+const key=randomBytes(32).toString('hex');
+const server=createServer();
+const transport=createTestTransport(()=>{const address=server.address();return address&&typeof address!=='string'?address.port:0;});
+server.on('request',createApp(repository,key,'http://localhost:8088',()=>{},transport));
+server.listen(0,'127.0.0.1');await once(server,'listening');
+const address=server.address();if(!address||typeof address==='string')throw new Error('No port');
+const base=`http://127.0.0.1:${address.port}`;
+const headers={Authorization:`Bearer ${key}`,'Content-Type':'application/json'};
+let id:string|undefined;
+try{
+ const created=await fetch(base+'/api/v1/endpoints',{method:'POST',headers,body:JSON.stringify({name:'Phase 4 response smoke'})});assert.equal(created.status,201);
+ const endpoint=await created.json() as {id:string;publicToken:string};id=endpoint.id;
+ const initial=await fetch(`${base}/api/v1/endpoints/${id}/response`,{headers}).then(r=>r.json()) as {mode:string};assert.equal(initial.mode,'DEFAULT');
+ const config={mode:'CUSTOM',status:422,contentType:'text/plain',body:'테스트 거절',headers:[['X-Test-Result','rejected']],delayMs:100};
+ assert.equal((await fetch(`${base}/api/v1/endpoints/${id}/response`,{method:'PUT',headers,body:JSON.stringify(config)})).status,200);
+ const [savedConfig]=await db.select().from(responseConfigs).where(eq(responseConfigs.endpointId,id));assert.equal(savedConfig.status,422);
+ const [before]=await db.select({count:sql<number>`count(*)`}).from(requests).where(eq(requests.endpointId,id));
+ const result=await fetch(`${base}/api/v1/endpoints/${id}/test`,{method:'POST',headers,body:JSON.stringify({method:'POST',body:'{ "한국어": "바이트 보존" }',query:[['tag','a'],['tag','b']],headers:[['X-Test-Sender','phase4']]})}).then(r=>r.json()) as {recorded:boolean;requestId:string;outcome:string;durationMs:number;response:{status:number;body:string}};
+ assert.equal(result.outcome,'RESPONSE');assert(result.recorded);assert.equal(result.response.status,422);assert.equal(result.response.body,config.body);assert(result.durationMs>=90);
+ const [capture]=await db.select().from(requests).where(eq(requests.id,result.requestId));
+ assert.equal(capture.source,'TEST');assert.equal(capture.endpointId,id);assert.equal(capture.responseBody,config.body);assert.equal(capture.responseDelayMs,100);assert.equal(capture.responseStatus,422);assert.deepEqual(capture.query,{tag:['a','b']});
+ assert.equal(Buffer.from(capture.rawBody,'base64').toString('utf8'),'{ "한국어": "바이트 보존" }');assert(!JSON.stringify(capture.headers).toLowerCase().includes('hookscope-internal-test-token'));
+ assert((capture.responseHeaders as [string,string][]).some(([name,value])=>name.toLowerCase()==='x-test-result'&&value==='rejected'));
+ const list=await fetch(`${base}/api/v1/endpoints/${id}/requests`,{headers}).then(r=>r.json()) as {items:{source:string;id:string}[]};assert.equal(list.items[0].source,'TEST');assert.equal(list.items[0].id,result.requestId);
+ assert.equal((await fetch(`${base}/api/v1/endpoints/${id}/test`,{method:'POST',headers,body:JSON.stringify({url:'http://169.254.169.254'})})).status,400);
+ await fetch(`${base}/api/v1/endpoints/${id}/response`,{method:'PUT',headers,body:JSON.stringify({mode:'CUSTOM',status:204})});
+ const empty=await fetch(`${base}/api/v1/endpoints/${id}/test`,{method:'POST',headers,body:'{}'}).then(r=>r.json()) as {recorded:boolean;requestId:string;response:{status:number;body:string}};
+ assert(empty.recorded);assert.equal(empty.response.status,204);assert.equal(empty.response.body,'');
+ const [old]=await db.select().from(requests).where(eq(requests.id,result.requestId));assert.equal(old.responseStatus,422);assert.equal(old.responseBody,config.body);
+ await fetch(`${base}/api/v1/endpoints/${id}/response`,{method:'PUT',headers,body:'{"mode":"DEFAULT"}'});
+ const external=await fetch(`${base}/h/${endpoint.publicToken}`,{method:'POST',headers:{'X-HookScope-Internal-Test-Token':'forged','Content-Type':'text/plain'},body:'external'});assert.equal(external.status,200);
+ const receipt=await external.json() as {requestId:string};assert.equal(external.headers.get('x-request-id'),receipt.requestId);
+ const [ordinary]=await db.select().from(requests).where(eq(requests.id,receipt.requestId));assert.equal(ordinary.source,'EXTERNAL');assert.equal(ordinary.responseStatus,200);
+ const [after]=await db.select({count:sql<number>`count(*)`}).from(requests).where(eq(requests.endpointId,id));assert.equal(Number(after.count)-Number(before.count),3);
+ console.log('PASS: PostgreSQL config persistence, real HTTP Test Sender, request correlation, response snapshots, 204 body, history immutability, default reset and spoof rejection');
+}finally{
+ if(id)await db.delete(endpoints).where(eq(endpoints.id,id));
+ await new Promise<void>(resolve=>server.close(()=>resolve()));await pool.end();
+}

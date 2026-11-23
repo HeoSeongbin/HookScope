@@ -6,6 +6,7 @@ import request from 'supertest';
 import { attachRealtime, type ReceivedEvent, type PublishReceived } from '../src/realtime.js';
 import { createApp } from '../src/app.js';
 import type { Repository } from '../src/repository.js';
+import {defaultResponseConfig} from '../src/responsePolicy.js';
 
 const endpointA = '9aa82a1c-4dd8-4568-8021-cd71f55080bb';
 const endpointB = '9aa82a1c-4dd8-4568-8021-cd71f55080bc';
@@ -15,6 +16,7 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(
 
 async function fixture() {
   const repo = {
+    response:vi.fn(async()=>defaultResponseConfig),
     endpoint: vi.fn(async (id: string) => [endpointA, endpointB].includes(id) ? { id } : undefined),
     resolve: vi.fn(async () => ({ id: endpointA })),
     save: vi.fn(async (data: object) => ({ ...data, id: endpointB, method: 'POST', receivedAt: new Date() })),

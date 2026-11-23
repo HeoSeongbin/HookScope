@@ -2,9 +2,9 @@
 
 Webhook Testing & Monitoring Platform. 실제 HTTP 요청을 받아 PostgreSQL에 저장하고 헤더·쿼리·본문을 분석하는 한국어 개발 콘솔입니다.
 
-현재 구현: **Phase 0–3**. 인증된 실시간 모니터, 검색·필터 및 구조화된 요청 분석을 지원합니다. 사용자 정의 응답·Test Sender·Replay·통계 차트는 다음 단계입니다. 공개 데모 주소는 없습니다.
+현재 구현: **Phase 0–4**. 실시간 모니터·검색·분석, 사용자 정의 응답과 자체 Endpoint Test Sender를 지원합니다. Replay·작업 큐·통계 차트는 다음 단계입니다. 공개 데모 주소는 없습니다.
 
-![Phase 3 요청 검색 및 JSON 트리](docs/screenshots/phase3-desktop.png)
+![Phase 4 응답 설정 및 Test Sender](docs/screenshots/phase4-desktop.png)
 
 ## 주요 기능
 - 암호학적 난수로 고유 수신 URL 생성, 관리 키와 공개 토큰 분리
@@ -16,6 +16,7 @@ Webhook Testing & Monitoring Platform. 실제 HTTP 요청을 받아 PostgreSQL�
 - 관리자 키로 인증된 Endpoint Room, Socket 상태 표시, 자동 재연결 및 REST 복구, 다중 탭 동기화
 - 서버 키워드 검색, Method/Status/Content-Type/수신 기간 필터, 최신·오래된 순 정렬 및 30건 페이지
 - 헤더 검색·복사, 중복 Query 행, JSON 트리·민감 필드 표시 마스킹, Text/Form 분석 및 원본 바이트 다운로드
+- Endpoint별 응답 Status/Content-Type/Body/Header/지연 설정, 실제 HTTP Test Sender 및 TEST 이력·응답 스냅샷
 - 본문 크기 제한, 기본 Rate Limit, 준비 상태 확인, Docker Compose
 
 ## 스택 및 구조
@@ -48,7 +49,7 @@ docker compose ps
 
 [관리 화면](http://localhost:8088)을 열고 .env의 ADMIN_KEY를 입력하세요. 이번 작업 환경에는 임의의 키가 담긴 .env가 이미 생성되어 있습니다. 해당 파일은 Git 및 Docker 빌드에서 제외됩니다. API는 localhost:3000, DB는 localhost:5432입니다. 호스트 포트는 루프백에만 바인딩됩니다. 8080 포트가 기존 서비스에 사용되고 있어 프론트 기본값을 8088로 정했습니다. 변경 시 FRONTEND_PORT와 FRONTEND_ORIGIN을 함께 수정하세요.
 
-DB 준비 후 API 시작 시 SQL 마이그레이션을 트랜잭션과 advisory lock 안에서 실행합니다. 서비스 healthcheck를 통해 기동과 준비 완료를 구분합니다. Named Volume에 DB가 유지됩니다.
+DB 준비 후 API 시작 시 SQL 마이그레이션을 트랜잭션과 advisory lock 안에서 실행하고 schema_migrations에 기록합니다. 기존 DB도 0002의 테이블·컬럼을 자동 추가하며 데이터를 삭제하지 않습니다. 서비스 healthcheck를 통해 기동과 준비 완료를 구분합니다. Named Volume에 DB가 유지됩니다.
 
 ```powershell
 docker compose logs backend
@@ -87,7 +88,23 @@ PowerShell에서는 curl.exe를 사용하고 JSON을 파일로 전송하면 셸 
 curl.exe -X POST 'http://localhost:8088/h/YOUR_PUBLIC_TOKEN' -H 'Content-Type: application/json' --data-binary '@docs/curl-sample.json'
 ```
 
-응답은 `200 {"requestId":"...","message":"Request recorded"}`이며 요청 기록의 접수 성공을 뜻합니다. 발신 시스템의 비즈니스 처리 성공을 의미하지 않습니다. DB 저장 실패는 503입니다.
+기본 응답은 `200 {"requestId":"...","message":"Request recorded"}`이며 요청 기록의 접수 성공을 뜻합니다. 발신 시스템의 비즈니스 처리 성공을 의미하지 않습니다. DB 저장 실패는 503입니다.
+
+## 응답 설정 및 Test Sender
+선택한 Endpoint의 **Endpoint 도구 → 응답 설정**에서 사용자 정의 모드를 선택하고 저장합니다. 이후 수신하는 요청에 적용하며 과거 요청의 응답 스냅샷은 바꾸지 않습니다. 기본 모드로 저장하면 기존 200 접수 JSON을 사용합니다.
+
+- Status 200–599, Content-Type JSON/Text, UTF-8 Body 최대 8KiB, 지연 0–2000ms를 지원합니다. 지연은 비동기이며 다른 요청의 이벤트 루프를 막지 않습니다.
+- 204·205·304는 Body를 비워야 합니다. JSON Body는 오류 재현을 위해 문법이 잘못된 문자열도 허용합니다.
+- Header는 `[["X-Test-Result","ok"]]` 형태입니다. X-Test-/X-Mock-/X-Custom-만 최대 12쌍 허용하고, 값은 ASCII 512자 이하입니다. 중복 이름·CRLF·Location·Cookie·보안/연결 Header 변경은 거부합니다.
+- 저장된 Response 탭은 수신 시점의 응답 계획입니다. 실제 클라이언트 수신 완료를 보증하지 않으며 Date/프록시 Header 전체를 보관하지 않습니다. 기존 기록에 스냅샷이 없으면 없다고 표시합니다.
+
+**테스트 전송** 탭에서는 읽기 전용 자체 URL, Method, Content-Type, Header/Query 쌍과 Body를 설정하고 실제 HTTP 요청을 보냅니다. Header/Query는 배열의 쌍으로 입력하므로 중복 Query도 유지됩니다. Body는 JSON/Text/Form UTF-8 8KiB까지, GET은 빈 Body만 허용합니다. Request Header는 위 X- 접두사와 Accept/User-Agent만 지원합니다. 관리 JSON 전체 16KiB 제한도 적용됩니다.
+
+전송 결과에서 실제 HTTP 응답·걸린 시간·DB 저장 확인을 보고 **수신 요청 상세 열기**로 이동할 수 있습니다. 테스트 수신 기록에는 `TEST` 배지가 붙습니다. 422 같은 사용자 정의 오류 응답도 정상적으로 기록될 수 있으므로 HTTP 상태와 저장 확인을 구분하세요. 테스트 API의 200은 실행 결과를 반환했다는 의미입니다.
+
+서버는 자신의 숫자 루프백 주소와 실제 listening port의 고정 경로로만 요청합니다. 사용자 URL·관리 Authorization·Cookie를 전달하지 않으며 redirect를 따라가지 않습니다. 전송 전체 5초, 응답 Body/Header 각 16KiB, 동시 8개, 관리 IP별 분당 20회를 제한하고 자동 재시도하지 않습니다. TIMEOUT/FAILED 또는 미확인 저장은 결과에 표시하며 늦게 저장된 요청은 목록에서 추가 확인할 수 있습니다.
+
+내부 일회용 식별자는 서버에서 Endpoint/Request ID와 결합해 한 번만 소비하므로 외부 요청이 Header를 흉내 내어 TEST 출처를 만들 수 없습니다. 내부 토큰은 이력에서 제외합니다. 전송 실패 자체의 별도 영속 Job/Attempt 이력과 설정 변경 감사 이력은 아직 제공하지 않습니다.
 
 ## 로컬 소스 개발
 ```powershell
@@ -118,12 +135,13 @@ npm test
 npm run build
 docker compose exec -T backend npm run smoke
 docker compose exec -T backend npm run smoke:filters
+docker compose exec -T backend npm run smoke:response
 npx playwright install chromium
 npx playwright test --config frontend/playwright.config.ts
 ```
 
-Vitest/Supertest 및 실제 Socket 클라이언트 테스트 **45개**는 기존 인증·수신·실시간 경계와 검색 조건 검증, Inspector 데이터 처리·마스킹을 검증합니다. Repository 더블 기반 테스트와 실제 PostgreSQL smoke를 구분합니다. `smoke`는 HTTP→DB 원본 바이트→Socket 알림 ID/시각→REST/인증을 검증합니다. `smoke:filters`는 **실제 HTTP 36건**을 수신하여 Endpoint 격리, 필터·리터럴 검색·UTC 범위·정렬·30/5건 페이지와 binary 바이트를 검증합니다. 두 smoke는 자신의 데이터를 정리합니다.
-Compose 기반 Playwright **5개**는 기존 수신·실시간 회귀, 필터 유지·검색/기간/상태/페이지, JSON 트리·헤더 복사·중복 Query, 원본 다운로드, Text/Form/malformed JSON 및 HTML 비실행을 확인합니다. 실제 Endpoint와 테스트 요청을 남기며 화면 수치는 DB 데이터만 사용합니다. CI는 타입 검사, Lint, 테스트, 빌드, PostgreSQL migration 및 두 smoke를 실행합니다. 원격 CI 실행은 아직 미검증입니다.
+Vitest/Supertest 및 실제 Socket/HTTP 클라이언트 테스트 **92개**가 기존 기능과 응답·입력 보안, 저장 실패, 출처 위조, 빈 응답, 비동기 지연, redirect 미추적, 크기·timeout·동시 전송 제한을 검증합니다. Repository 더블 테스트와 실제 PostgreSQL smoke를 구분합니다. 기존 `smoke`·`smoke:filters`에 더해 `smoke:response`는 설정 저장, 한국어 원본 바이트, TEST 연결, 422/204 관측, 과거 스냅샷 불변, 기본 복원·위조 거부를 확인합니다. 각 smoke는 자신의 데이터를 정리합니다.
+Compose 기반 Playwright **6개**는 기존 5개 회귀와 응답 설정→실제 Test Sender→실시간 TEST 표시→상세/Response→204→기본 복원 및 Endpoint 설정 격리를 확인합니다. 실제 Endpoint와 테스트 요청을 남기며 화면 수치는 DB 데이터만 사용합니다. 기존 DB 130건이 migration 및 재실행 후 그대로 보존됨을 확인했습니다. CI는 타입 검사, Lint, 테스트, 빌드, PostgreSQL migration 및 세 smoke를 실행합니다. 원격 CI 실행은 아직 미검증입니다.
 
 ## 보안·보관 정책 및 제약
 - 로컬 단일 관리자 MVP입니다. ADMIN_KEY를 공유하면 같은 관리 권한을 갖습니다. 다중 사용자·소유권·로그인 세션은 미구현입니다.
@@ -133,9 +151,9 @@ Compose 기반 Playwright **5개**는 기존 수신·실시간 회귀, 필터 �
 - Authorization, Cookie, token/secret/API-key 계열 헤더는 저장 전에 마스킹합니다. Body·Query는 원문이 저장되므로 실제 자격 증명을 보내지 마세요. 요청 IP는 저장하지 않습니다.
 - 자동 만료·삭제 UI·전체 저장 용량 제한은 후속 Phase입니다. 현재 데이터는 수동 DB 정리 전까지 보관됩니다. 데이터가 필요하면 Volume을 유지하세요.
 - 전체 응답 소요시간은 아직 측정하지 않습니다. durationMs는 저장 전 캡처 준비 시간이며 responseStatus는 예정 응답입니다. 실제 전송 완료는 구조화 로그의 RESPONSE_SENT입니다.
-- Light Mode·Custom Response·Test Sender·Replay 및 BullMQ Worker는 이번 범위에서 구현하지 않았습니다. 외부 URL 전송은 제공하지 않습니다.
+- Light Mode·Replay 및 BullMQ Worker는 이번 범위에서 구현하지 않았습니다. 외부 URL 전송은 제공하지 않습니다.
 - 키워드 검색은 Endpoint 범위의 텍스트 스캔입니다. 대량 검색·부하 성능은 미검증이며 JSON 트리는 분기당 100개씩, 최대 32단계까지만 펼칩니다. 마스킹은 키 이름 휴리스틱이며 비밀정보의 완전한 탐지를 보장하지 않습니다.
 - 배포된 서비스가 없습니다. 공개 운영에는 HTTPS, 계정별 권한, 수신/보관 한도, 정리 작업, 공유 Rate Limit을 추가해야 합니다.
-- 2026-11-19 실행한 `npm audit` 및 `npm audit --omit=dev`는 모두 0건입니다. Phase 2 당시의 High 11건 결과와 구분하여 현재 레지스트리 응답을 기록했습니다. 이번 Phase는 새 의존성을 추가하지 않았습니다. 로컬 backend 이미지는 테스트 실행을 위해 개발 의존성도 포함합니다.
+- 2026-11-23 실행한 `npm audit` 및 `npm audit --omit=dev`는 모두 0건입니다. 이번 Phase는 새 의존성을 추가하지 않았습니다. 로컬 backend 이미지는 테스트 실행을 위해 개발 의존성도 포함합니다.
 
-스크린샷: [데스크톱](docs/screenshots/phase3-desktop.png) · [모바일](docs/screenshots/phase3-mobile.png). 다음 단계는 **Phase 4 사용자 정의 응답 및 자체 Endpoint Test Sender**입니다.
+스크린샷: [데스크톱](docs/screenshots/phase4-desktop.png) · [모바일](docs/screenshots/phase4-mobile.png). 다음 단계는 **Phase 5 Internal Replay 및 Redis/BullMQ 작업 큐**입니다.

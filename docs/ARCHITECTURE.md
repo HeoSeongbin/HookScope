@@ -1,14 +1,18 @@
-# Phase 1–3 아키텍처
+# Phase 1–4 아키텍처
 
 frontend/src/main.tsx: 메모리 내 관리자 키, Endpoint 선택, 수동 REST 조회 및 상세 보기.
 frontend/src/useRealtime.ts: Socket 연결·구독·재연결·정리 및 REST 재조회 예약.
 frontend/src/realtimeEvents.ts: 제한된 ID 집합으로 알림 중복·Endpoint 검증.
 frontend/src/RequestFilters.tsx 및 types.ts: 검색 초안·적용값 분리와 시간대 포함 query 직렬화.
 frontend/src/RequestInspector.tsx, JsonTree.tsx, inspectorData.ts: 상세 탭·헤더 검색/복사·중복값 표·JSON 트리·표시 마스킹·원본 바이트 다운로드.
+frontend/src/EndpointTools.tsx: 선택 Endpoint 응답 설정·자체 HTTP Test Sender·실제 결과와 저장 요청 상세 연결. Endpoint 변경 시 이전 도구 상태를 정리한다.
 backend/src/app.ts: HTTP 라우팅·관리 인증·크기 제한·수신/조회 조합.
 backend/src/body.ts: Raw Buffer에서 JSON/Text/Form 해석 및 헤더 마스킹.
 backend/src/repository.ts: Drizzle CRUD. 테스트에서는 이 경계에 더블 주입.
 backend/src/requestFilters.ts: Zod query 검증 및 Endpoint 범위 SQL 조건. 사용자 문자열은 SQL 파라미터로 전달한다.
+backend/src/responsePolicy.ts: 응답 스키마 및 요청별 고정 응답 계획.
+backend/src/testSender.ts: 입력 검증·자체 숫자 루프백 HTTP 전송·일회용 출처/Request ID·timeout/size/concurrency 제한. app.ts는 인터페이스를 주입받는다.
+backend/src/responseSmoke.ts: 실제 PostgreSQL 설정/스냅샷·HTTP 전송·출처·빈 응답·과거 이력 불변 검증.
 backend/src/filterSmoke.ts: 실제 HTTP 36건 기반 필터·검색·페이지·원본 바이트 DB 검증, 자체 데이터 정리.
 backend/src/schema.ts 및 migrations/0001_initial.sql: 모델 및 초기 PostgreSQL 스키마.
 backend/src/server.ts: 환경 설정·시작·종료.
@@ -23,3 +27,4 @@ backend/src/smoke.ts: 실제 HTTP→PostgreSQL 검증, 자체 생성 데이터 �
 현재 적용된 필터와 정렬을 실시간 재조회에도 그대로 사용한다. 목록/total은 한 REPEATABLE READ 읽기 전용 트랜잭션의 스냅샷을 사용하며 receivedAt/UUID로 정렬한다. 페이지는 본문 없이 30건만 반환한다. 조건 변경은 페이지/상세를 초기화하며 로그아웃 시 필터도 초기화한다. JSON 표시 마스킹은 데이터 복사본에만 적용하고 Base64 Raw Body 저장값은 변경하지 않는다.
 
 Docker Compose는 nginx 정적 프론트/리버스 프록시, Node HTTP + Socket.IO 서버, PostgreSQL, Redis로 구성한다. nginx와 Vite 모두 /socket.io/ polling 및 WebSocket upgrade를 프록시한다. 컨테이너 API 시작 시 migration을 먼저 실행한다. DB 실패 시 ready 및 수신 API에서 성공을 반환하지 않는다. 실시간 연결에는 별도 DB 테이블이나 스키마 변경이 필요하지 않다.
+Phase 4는 webhook_response_configs와 요청별 응답 계획/출처 컬럼을 migration 0002로 추가한다. schema_migrations ledger·advisory lock·트랜잭션으로 미적용 파일만 순서대로 실행한다. 테스트 전송은 같은 API 프로세스의 loopback에만 도달하며 외부 URL 또는 관리 인증 키를 전송하지 않는다. 수신 측은 일회용 내부 증명을 확인하고 기존 저장/알림 흐름에 합류한다. 응답 실패와 저장 실패는 독립적으로 표시하며 스냅샷과 실제 Test Sender 관측 결과를 구분한다.

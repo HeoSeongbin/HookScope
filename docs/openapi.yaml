@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
-  title: HookScope Phase 3 API
-  version: 0.3.0
-  description: Endpoint-scoped filters and literal keyword search. Authenticated Socket.IO and inspector policies are documented in PROJECT.md.
+  title: HookScope Phase 4 API
+  version: 0.4.0
+  description: Authenticated endpoint management, filters, response configuration and loopback-only Test Sender. Full policies are documented in PROJECT.md.
 servers:
   - url: http://localhost:8088
 security:
@@ -84,6 +84,55 @@ paths:
       responses:
         '200': {description: 'Capture including masked header pairs, duplicate query arrays, parsedBody, parseError, rawBody (Base64), rawEncoding'}
         '404': {description: Not found}
+  /api/v1/endpoints/{id}/response:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      summary: Get endpoint response config; defaults apply if no row exists
+      responses:
+        '200':
+          description: Current response config
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ResponseConfig'}
+        '401': {description: Unauthorized}
+        '404': {description: Endpoint not found}
+    put:
+      summary: Atomically save config for future captures; existing snapshots remain unchanged
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ResponseConfig'}
+      responses:
+        '200': {description: Saved response config}
+        '400': {description: Invalid config or unsafe headers}
+        '401': {description: Unauthorized}
+        '404': {description: Endpoint not found}
+        '413': {description: Management JSON exceeds 16 KiB}
+  /api/v1/endpoints/{id}/test:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      summary: Send actual HTTP to own loopback endpoint; user URLs and redirects are unsupported
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TestInput'}
+      responses:
+        '200':
+          description: Attempt result, not business success; recorded confirms DB visibility at result time
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TestResult'}
+        '400': {description: Invalid input including user URL or forbidden headers}
+        '401': {description: Unauthorized}
+        '404': {description: Endpoint not found}
+        '409': {description: Endpoint disabled}
+        '413': {description: Management JSON exceeds 16 KiB}
+        '429': {description: 20 attempts per minute per management IP or 8 concurrent attempts exceeded}
+        '503': {description: Test service or storage unavailable}
   /h/{publicToken}:
     parameters:
       - name: publicToken
@@ -94,7 +143,7 @@ paths:
       security: []
       summary: Record a webhook (max 256 KiB, compression unsupported)
       responses:
-        '200': {description: 'Recorded: requestId and message'}
+        '200': {description: Default receipt or configured custom response; custom mode may return any status 200-599}
         '404': {description: Unknown or disabled endpoint}
         '413': {description: Body too large}
         '415': {description: Unsupported content encoding}
@@ -116,6 +165,64 @@ paths:
         '200': {description: Request table reachable}
         '503': {description: Database not ready}
 components:
+  schemas:
+    Pair:
+      type: array
+      minItems: 2
+      maxItems: 2
+      items: {type: string}
+    ResponseConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        mode: {type: string, enum: [DEFAULT, CUSTOM], default: DEFAULT}
+        status: {type: integer, minimum: 200, maximum: 599, default: 200}
+        contentType: {type: string, enum: [application/json, text/plain], default: application/json}
+        body:
+          type: string
+          description: UTF-8 maximum 8192 bytes; empty for CUSTOM status 204/205/304; JSON syntax intentionally unrestricted
+          default: ''
+        headers:
+          type: array
+          maxItems: 12
+          description: Unique case-insensitive X-Test-/X-Mock-/X-Custom- names; ASCII values up to 512 chars; CRLF forbidden
+          items: {$ref: '#/components/schemas/Pair'}
+          default: []
+        delayMs: {type: integer, minimum: 0, maximum: 2000, default: 0}
+    TestInput:
+      type: object
+      additionalProperties: false
+      properties:
+        method: {type: string, enum: [GET, POST, PUT, PATCH, DELETE], default: POST}
+        contentType: {type: string, enum: [application/json, text/plain, application/x-www-form-urlencoded], default: application/json}
+        body: {type: string, description: UTF-8 maximum 8192 bytes; GET requires empty body, default: ''}
+        headers:
+          type: array
+          maxItems: 12
+          description: Safe X-Test-/X-Mock-/X-Custom- names plus Accept/User-Agent; no Authorization/Cookie/Host or internal token
+          items: {$ref: '#/components/schemas/Pair'}
+          default: []
+        query:
+          type: array
+          maxItems: 20
+          description: Duplicate key pairs; key 1-80 chars, value up to 512 chars, encoded query up to 4096 bytes
+          items: {$ref: '#/components/schemas/Pair'}
+          default: []
+    TestResult:
+      type: object
+      properties:
+        outcome: {type: string, enum: [RESPONSE, TIMEOUT, FAILED]}
+        recorded: {type: boolean}
+        requestId: {type: [string, 'null'], description: Confirmed stored request ID only}
+        durationMs: {type: integer}
+        response:
+          type: [object, 'null']
+          properties:
+            status: {type: integer}
+            body: {type: string}
+            headers:
+              type: array
+              items: {$ref: '#/components/schemas/Pair'}
   securitySchemes:
     AdminKey: {type: http, scheme: bearer}
   parameters:

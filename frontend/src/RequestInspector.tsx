@@ -35,6 +35,6 @@ export function RequestInspector({detail,copy}:{detail:Capture|null;copy:(value:
     </>:tab==='Raw'?<>
       <div className="inspector-tools"><button onClick={download}><Download size={13}/> 원본 다운로드</button><button onClick={()=>void copy(raw)}><Copy size={13}/> Base64 복사</button></div>
       <pre>{textual?new TextDecoder().decode(rawBytes(raw))||'(빈 본문)':raw||'(빈 본문)'}</pre><small className="raw-note">{textual?'UTF-8 미리보기':'Base64 원본 바이트'} · 다운로드는 재인코딩하지 않은 원본 바이트입니다.</small>
-    </>:<pre>{tab==='Response'?pretty({status:detail.responseStatus,body:{requestId:detail.id,message:'Request recorded'},capturePreparationMs:detail.durationMs}):pretty({id:detail.id,endpointId:detail.endpointId,method:detail.method,receivedAt:detail.receivedAt,contentType:detail.contentType,bodySize:detail.bodySize,parseError:detail.parseError})}</pre>}
+    </>:<pre>{tab==='Response'?pretty({status:detail.responseStatus,body:detail.responseBody??null,headers:detail.responseHeaders??null,configuredDelayMs:detail.responseDelayMs??0,capturePreparationMs:detail.durationMs,note:detail.responseBody==null?'과거 기록에는 응답 본문 스냅샷이 없습니다.':'저장 시점의 응답 계획입니다. 클라이언트 수신 완료를 보증하지 않습니다.'}):pretty({id:detail.id,endpointId:detail.endpointId,source:detail.source??'EXTERNAL',method:detail.method,receivedAt:detail.receivedAt,contentType:detail.contentType,bodySize:detail.bodySize,parseError:detail.parseError})}</pre>}
   </section>;
 }

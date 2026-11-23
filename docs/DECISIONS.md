@@ -38,3 +38,14 @@ live는 프로세스, ready는 실제 요청 테이블 접근 가능 여부. DB 
 ## ADR-012 · 구조화 Inspector와 원본 바이트 (채택, Phase 3)
 Inspector를 별도 컴포넌트로 분리하고 헤더 쌍·Query 값 배열을 행으로 표시한다. JSON Tree는 React 텍스트 렌더링만 사용하며 지연 펼치기·분기당 100개·깊이 제한으로 과도한 노드 생성을 제한한다. JSON 민감 키 마스킹은 표시 데이터의 복사본에만 적용한다. Raw UTF-8 미리보기와 원본 .bin 다운로드를 구분하며 binary/multipart는 Base64 및 메타데이터로 표시한다. 다운로드의 MIME은 application/octet-stream으로 고정해 수신 HTML 등을 실행하지 않는다.
 필터는 초안과 적용값을 분리해 검색 버튼으로 적용한다. 실시간 콜백은 최신 적용값으로 REST를 재조회하고 기존 세대 번호로 오래된 응답을 무시한다. 검색·페이지 변경 시 선택한 상세를 초기화하여 다른 결과의 상세와 혼동하지 않게 한다.
+
+## ADR-013 · 제한된 Custom Response와 수신 시점 스냅샷 (채택, Phase 4)
+응답 설정을 Endpoint별 별도 테이블로 두고 원자적으로 upsert한다. 상태 200–599, JSON/Text, UTF-8 8KiB, 2초 비동기 지연과 제한된 X-Test-/X-Mock-/X-Custom- Header만 제공한다. 프로토콜·redirect·Cookie·보안 Header는 초기 범위에서 금지한다. 204/205/304의 본문은 비운다. JSON 문자열 문법을 강제하지 않아 오류 응답 재현도 가능하다.
+수신 시 응답 계획을 계산하고 요청과 함께 스냅샷으로 저장하여 이후 설정 변경이 과거 기록을 바꾸지 못하게 한다. Header 값은 기존 마스킹 규칙을 적용한다. 영속 저장 이후 알림·지연·전송을 수행한다. DB 실패에서는 준비된 Content-Length/Content-Type/사용자 Header를 제거하고 503을 보낸다. 실제 전달 완료 보증은 하지 않으며 responseBody=null인 과거 기록을 임의의 기본 본문으로 복원하지 않는다.
+
+## ADR-014 · 루프백 HTTP Test Sender와 일회용 출처 증명 (채택, Phase 4)
+내부 수신 함수를 직접 호출하는 대신 숫자 loopback/자신의 listening port/고정 경로로 실제 HTTP를 보내 기존 raw 파싱·제한·DB·Socket을 통과시킨다. Host는 이 고정 목적지로 서버가 생성하고 사용자 URL·Host·관리 Authorization·Cookie는 전달하지 않는다. Node HTTP 클라이언트로 redirect를 추적하지 않으며 body/header/time/concurrency/rate를 제한한다. 자동 재시도와 작업 큐는 추가하지 않는다.
+TEST 출처를 단순 사용자 Header에 의존하지 않기 위해 256bit 일회용 토큰을 메모리에서 Endpoint/Request ID와 결합하고 수신 시 consume한다. 원래의 사용자 Header와 충돌하지 않는 X-HookScope-Internal-Test-Token을 예약하고 이력에서 제거한다. Map은 실행 중인 테스트에만 유지하고 finally에서 정리한다. 결과는 실제 DB 조회로 기록 연결을 확인한다. 실패 전송의 영속 시도 이력은 Phase 5로 이월한다.
+
+## ADR-015 · SQL migration ledger 도입 (채택, Phase 4)
+초기 0001 SQL 단독 실행 방식을 schema_migrations 기반 순차 실행으로 확장한다. 기존 advisory lock과 트랜잭션을 유지하여 동시 시작·실패·재시작에 대응한다. 기존 0001의 IF NOT EXISTS를 활용해 이미 실행한 DB에도 ledger를 안전하게 도입하고 0002에 추가 테이블/컬럼만 반영한다. 적용 후 SQL은 수정하지 않는다. 기존 데이터 130건을 보존하고 재실행 후에도 동일함을 실제 Compose DB에서 검증했다.

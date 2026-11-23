@@ -3,10 +3,11 @@ import request from 'supertest';
 import {createApp} from '../src/app.js';
 import {parseBody,maskedHeaders} from '../src/body.js';
 import type {Repository} from '../src/repository.js';
+import {defaultResponseConfig} from '../src/responsePolicy.js';
 const id='9aa82a1c-4dd8-4568-8021-cd71f55080bb';
 const key='a'.repeat(40);
 function fixture(){
- const repo={ready:vi.fn().mockResolvedValue(undefined),listEndpoints:vi.fn().mockResolvedValue([]),createEndpoint:vi.fn().mockImplementation(async(name,publicToken)=>({id,name,publicToken})),endpoint:vi.fn().mockResolvedValue({id}),resolve:vi.fn().mockResolvedValue({id}),save:vi.fn().mockImplementation(async d=>({...d,id})),list:vi.fn().mockResolvedValue({items:[],page:1,pageSize:30,total:0}),request:vi.fn().mockResolvedValue(undefined)} as unknown as Repository;
+ const repo={ready:vi.fn().mockResolvedValue(undefined),response:vi.fn().mockResolvedValue(defaultResponseConfig),listEndpoints:vi.fn().mockResolvedValue([]),createEndpoint:vi.fn().mockImplementation(async(name,publicToken)=>({id,name,publicToken})),endpoint:vi.fn().mockResolvedValue({id}),resolve:vi.fn().mockResolvedValue({id}),save:vi.fn().mockImplementation(async d=>({...d,id})),list:vi.fn().mockResolvedValue({items:[],page:1,pageSize:30,total:0}),request:vi.fn().mockResolvedValue(undefined)} as unknown as Repository;
  return {repo,app:createApp(repo,key)};
 }
 describe('HTTP ingestion and management boundary',()=>{

@@ -1,7 +1,33 @@
-# 개발 상태 — 2026-11-19
+# 개발 상태 — 2026-11-23
 
 ## 현재 Phase
-**Phase 0–3 구현·검증 완료. 다음 미완료 단계는 Phase 4이다.** 로컬 개발용 단일 관리자 MVP이며 공개 운영 준비 완료를 의미하지 않는다. Phase 1·2의 과거 검증 결과는 이력으로 유지한다.
+**Phase 0–4 구현·검증 완료. 다음 미완료 단계는 Phase 5이다.** 로컬 개발용 단일 관리자 MVP이며 공개 운영 준비 완료를 의미하지 않는다. 과거 Phase의 검증 기록은 이력으로 유지한다.
+
+## Phase 4 구현 및 검증 (2026-11-23)
+- 필수 문서·소스·Git 비교 후 main이 origin/main과 같고 변경이 없는 기준 bd2e1e0에서 시작했다. 기존 테스트 45개를 재확인했다. Phase 3의 커밋 전 문구는 당시 이력이며 이후 사용자 요청으로 bd2e1e0를 푸시했다.
+- Endpoint 응답 설정 GET/PUT API와 별도 테이블, DEFAULT/CUSTOM, 상태 200–599·JSON/Text·UTF-8 8KiB·안전한 사용자 Header·최대 2초 비동기 지연 구현.
+- 수신 시점 responseBody/responseHeaders/responseDelayMs/source 스냅샷을 요청과 함께 저장. 저장 실패에서 준비된 Custom 응답을 제거하고 503. 알림·전송 완료/중단을 영속 저장과 구분한다.
+- 자체 Test Sender POST API·UI: 고정 숫자 루프백/자신의 listening port/기존 수신 경로로 실제 HTTP 전송. URL·관리 인증 전달·redirect·자동 재시도 금지. 5초·응답 16KiB·동시 8개·관리 IP별 20회/분 제한.
+- 일회용 내부 토큰을 Endpoint/Request ID와 연결해 TEST 출처를 확인하고 원본 토큰을 이력에서 제거. 결과 시점 DB 확인을 바탕으로 실제 수신 상세에 연결. 일반 Header와 출처 증명은 분리한다.
+- schema_migrations ledger, 트랜잭션/advisory lock 및 0002 추가 migration. 기존 요청 **130건이 업그레이드 후·migration 재실행 후 모두 유지**됐고, 과거 응답 본문을 임의 생성하지 않고 null로 유지함을 확인했다.
+- **Vitest 92/92 통과:** 기존 45개 + 응답/테스트 입력·실제 루프백 HTTP/전송 보안·제한 47개. 저장 경계는 Repository 더블이며 실제 DB 검증은 아래 smoke와 구분한다.
+- **실제 PostgreSQL smoke 3종 통과:** 기존 HTTP→DB→Socket 및 36건 필터 검증, 신규 config 저장·422/204 관측·한국어 Raw Body·중복 Query·TEST ID 연결·과거 스냅샷 불변·기본 복원·외부 위조 거부. 각 smoke는 자체 데이터 정리.
+- **Compose Playwright 6/6 통과:** 기존 5개 + 응답 설정→실제 전송→실시간 TEST 표시→상세/Query/응답 snapshot→204→기본 복원→다른 Endpoint 설정 격리 및 재조회 영속화. 데스크톱/390px 모바일 화면 검토 완료.
+- TypeScript·ESLint·Production Build 통과. Compose 빌드·migration·기동 성공 및 PostgreSQL/Redis/backend/frontend 모두 healthy. npm audit 전체/운영 의존성 모두 0건. 새 의존성 없음.
+- 원격 CI, 공개 운영, 부하/멀티 인스턴스·모든 장애 조합은 미검증. 테스트 실패 전송 자체의 영속 Job/Attempt와 설정 감사는 Phase 5/7로 이월. 전체 저장량 한도·자동 TTL 미구현 제약은 유지한다.
+
+## Phase 4에서 해결한 문제
+- 종료된 Docker 엔진을 시작하고 실제 Compose 검증을 진행했다.
+- Node HTTP raw Header 배열 사용 시 Host가 자동 생성되지 않아 400을 받는 문제를 실제 HTTP 테스트로 발견했다. 사용자 입력 대신 고정 루프백 Host를 추가하고 재검증했다.
+- 초기 내부 식별자 이름이 기존 E2E의 일반 X-HookScope-Test Header와 충돌해 해당 Header가 사라졌다. 예약 이름을 X-HookScope-Internal-Test-Token으로 분리하여 일반 사용자 Header 보존과 위조 방지를 함께 검증했다.
+- 지연/빈 응답/Custom 오류 상태에서도 Request ID를 응답 본문에 의존하지 않고 연결하도록 일회용 서버 측 ID를 사용했다. 저장 실패 시 기존 Content-Length가 오류 응답을 깨뜨리지 않게 제거했다.
+
+## Phase 4 변경 파일
+- backend/src/responsePolicy.ts, testSender.ts, responseSmoke.ts, tests/responseAndTest.test.ts, migrations/0002_response_and_test.sql 신규.
+- backend/src/app.ts, repository.ts, schema.ts, migrate.ts, server.ts, package.json 및 기존 app/realtime 테스트 수정. CI에 response smoke 추가.
+- frontend/src/EndpointTools.tsx, tests/phase4.spec.ts 신규; main.tsx, RequestInspector.tsx, types.ts, style.css 수정.
+- PROJECT.md, README.md, PROGRESS.md, DECISIONS.md, ARCHITECTURE.md, TEST-SCENARIOS.md, openapi.yaml 갱신. Phase 4 스크린샷 신규 및 기존 E2E 화면 재생성.
+- 현재 변경은 로컬 작업 폴더에 있으며 이번 작업에서 커밋·푸시는 수행하지 않았다.
 
 ## Phase 3 구현 및 검증 (2026-11-19)
 - 필수 문서·소스·Git 상태 비교: main은 origin/main과 같고 작업 전 변경사항이 없었다(기준 커밋 cbb53ab). 문서에 남은 Git 미초기화 기록은 Phase 1·2 당시 이력이다. 이번 변경은 로컬 작업 폴더에 있으며 커밋·푸시는 수행하지 않았다.
@@ -86,16 +112,16 @@
 6. Nginx access log의 공개 수신 토큰 노출 가능성: 기본 access logging 비활성화.
 
 ## 미완료 및 제약
-- Phase 4 이후 Custom Response, Test Sender, Replay/Worker, 통계, 다중 사용자 인증, 자동 보관·정리, 전체 용량 및 엔드포인트별 quota는 미구현.
+- Phase 5 이후 Replay/Worker, 통계, 다중 사용자 인증, 자동 보관·정리, 전체 용량 및 엔드포인트별 quota는 미구현.
 - 현재 본문·쿼리는 원문 보관. 자동 TTL 없이 수동 DB 정리 전까지 유지.
 - 응답 durationMs는 DB insert 전 준비 시간이고 실제 전체 처리시간이 아니다.
 - 대량 요청 부하 테스트·공개 배포·HTTPS·원격 CI는 미검증.
-- 최초 폴더는 Git 저장소가 아니었으며 Phase 2 종료 후 사용자 요청으로 main 커밋 cbb53ab를 origin에 푸시했다. Phase 3 변경은 아직 커밋하지 않았다.
+- 최초 폴더는 Git 저장소가 아니었으며 사용자 요청으로 Phase 2의 cbb53ab, Phase 3의 bd2e1e0를 origin/main에 푸시했다. Phase 4 변경은 아직 커밋하지 않았다.
 
 ## 다음 작업
-Phase 4: Custom Response Status/Body/Header/Delay 검증 및 안전한 응답 설정, 자체 Endpoint에 한정한 Test Sender, 응답 확인과 테스트 요청 이력 연결. 외부 임의 URL 전송이나 Replay는 포함하지 않는다.
+Phase 5: Internal Replay, Redis/BullMQ Job 및 Worker, 시도별 영속 이력·제한된 재시도/백오프·실패 원인·중복 실행 대응·Replay Center. 외부 임의 URL 전송은 계속 금지하고 별도 검토한다.
 
 ## 실행 상태와 차단 요인
 로컬 관리 콘솔: http://localhost:8088. 관리자 키는 Git 제외된 루트 .env의 ADMIN_KEY. Compose 서비스는 실행 상태로 유지한다.
 테스트가 만든 Endpoint와 실제 요청은 로컬 DB에 남아 있으며 가짜 통계나 샘플 목록을 주입하지 않았다. smoke 자체 데이터는 자동 정리한다.
-Phase 3의 기능 검증 차단 요인은 없다. 이벤트 전달은 best effort이며 유실 시 적용 필터의 REST 재조회가 기준이다. 현재 관리자 키를 공유한 사용자는 모든 Endpoint를 관리하며 계정별 소유권은 아직 없다. 원본 Body·Query 및 Raw 다운로드에는 민감값이 남는다.
+Phase 4의 기능 검증 차단 요인은 없다. 이벤트 전달은 best effort이며 유실 시 적용 필터의 REST 재조회가 기준이다. 현재 관리자 키를 공유한 사용자는 모든 Endpoint를 관리하며 계정별 소유권은 아직 없다. 원본 Body·Query·응답 설정·Raw 다운로드에는 민감값이 남을 수 있다. TIMEOUT/FAILED는 저장 실패와 동일하지 않으며 결과 시점 저장 확인과 실제 HTTP 관측을 구분한다.

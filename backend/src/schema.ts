@@ -10,5 +10,14 @@ export const requests = pgTable('webhook_requests', {
   headers:jsonb('headers').notNull(), rawBody:text('raw_body').notNull(), parsedBody:jsonb('parsed_body'),
   parseError:text('parse_error'), contentType:text('content_type').notNull(), bodySize:integer('body_size').notNull(),
   receivedAt:timestamp('received_at',{withTimezone:true}).notNull().defaultNow(),
-  responseStatus:integer('response_status').notNull(), durationMs:integer('duration_ms').notNull()
+  responseStatus:integer('response_status').notNull(), durationMs:integer('duration_ms').notNull(),
+  responseBody:text('response_body'),responseHeaders:jsonb('response_headers'),
+  responseDelayMs:integer('response_delay_ms').notNull().default(0),source:text('source').notNull().default('EXTERNAL')
 },t=>[index('requests_endpoint_time_idx').on(t.endpointId,t.receivedAt)]);
+export const responseConfigs=pgTable('webhook_response_configs',{
+  endpointId:uuid('endpoint_id').primaryKey().references(()=>endpoints.id,{onDelete:'cascade'}),
+  mode:text('mode').notNull().default('DEFAULT'),status:integer('status').notNull().default(200),
+  contentType:text('content_type').notNull().default('application/json'),body:text('body').notNull().default(''),
+  headers:jsonb('headers').notNull().default([]),delayMs:integer('delay_ms').notNull().default(0),
+  updatedAt:timestamp('updated_at',{withTimezone:true}).notNull().defaultNow(),
+});

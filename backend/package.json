@@ -10,7 +10,8 @@
     "migrate": "tsx src/migrate.ts",
     "test": "vitest run",
     "smoke": "tsx src/smoke.ts",
-    "smoke:filters": "tsx src/filterSmoke.ts"
+    "smoke:filters": "tsx src/filterSmoke.ts",
+    "smoke:response": "tsx src/responseSmoke.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
