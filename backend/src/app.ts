@@ -14,8 +14,10 @@ import {requestFiltersSchema} from './requestFilters.js';
 import {responseConfigSchema,responsePlan,customHeaderName} from './responsePolicy.js';
 import {testInputSchema,TestLimitError,type TestTransport} from './testSender.js';
 import {setTimeout as delay} from 'node:timers/promises';
+import type {ReplayService} from './replayService.js';
+import {ReplayError} from './replayPolicy.js';
 const log=pino();
-export function createApp(repo:Repository,key:string,origin='http://localhost:5173',publish:PublishReceived=()=>{},tests?:TestTransport) {
+export function createApp(repo:Repository,key:string,origin='http://localhost:5173',publish:PublishReceived=()=>{},tests?:TestTransport,replays?:ReplayService) {
  if(key.length<32) throw new Error('ADMIN_KEY must contain at least 32 characters');
  const app=express(); app.disable('x-powered-by');app.set('query parser','simple');
  app.use(helmet());app.use(cors({origin,methods:['GET','POST','PUT'],allowedHeaders:['Authorization','Content-Type']}));
@@ -30,8 +32,11 @@ export function createApp(repo:Repository,key:string,origin='http://localhost:51
   const start=performance.now(); const endpoint=await repo.resolve(String(req.params.token));
   if(!endpoint){res.status(404).json({error:{code:'ENDPOINT_NOT_FOUND'}});return;}
   const raw=Buffer.isBuffer(req.body)?req.body:Buffer.alloc(0);const contentType=req.get('content-type')??'';
+  const replayProof=req.get('x-hookscope-internal-replay');
+  if(replayProof&&!replays)throw new ReplayError(503,'REPLAY_UNAVAILABLE');
+  const replayAttempt=await replays?.verify(replayProof,endpoint.id,req.method,raw,new URL(req.originalUrl,'http://local').searchParams.toString());
   const testId=tests?.claim(req.get('x-hookscope-internal-test-token'),endpoint.id);
-  const requestId=testId??String(res.getHeader('X-Request-Id'));
+  const requestId=replayAttempt?.requestId??testId??String(res.getHeader('X-Request-Id'));
   const plan=responsePlan(await repo.response(endpoint.id),requestId);
   res.status(plan.status);res.setHeader('X-Request-Id',requestId);
   if(![204,205,304].includes(plan.status))res.setHeader('Content-Type',plan.contentType);
@@ -39,8 +44,15 @@ export function createApp(repo:Repository,key:string,origin='http://localhost:51
   for(const [name,value] of plan.headers)res.setHeader(name,value);
   const responseHeaders=maskedHeaders(Object.entries(res.getHeaders()).flatMap(([name,value])=>[name,String(value)]));
   const rawHeaders:string[]=[];
-  for(let i=0;i<req.rawHeaders.length;i+=2)if(req.rawHeaders[i].toLowerCase()!=='x-hookscope-internal-test-token')rawHeaders.push(req.rawHeaders[i],req.rawHeaders[i+1]);
-  const stored=await repo.save({id:requestId,endpointId:endpoint.id,method:req.method,path:'/h/[REDACTED]',query:pairs(new URL(req.originalUrl,'http://local').searchParams),headers:maskedHeaders(rawHeaders),rawBody:raw.toString('base64'),...parseBody(raw,contentType),contentType,bodySize:raw.length,responseStatus:plan.status,responseBody:plan.body,responseHeaders,responseDelayMs:plan.delayMs,source:testId?'TEST':'EXTERNAL',durationMs:Math.round(performance.now()-start)});
+  for(let i=0;i<req.rawHeaders.length;i+=2)if(!['x-hookscope-internal-test-token','x-hookscope-internal-replay'].includes(req.rawHeaders[i].toLowerCase()))rawHeaders.push(req.rawHeaders[i],req.rawHeaders[i+1]);
+  const data={id:requestId,endpointId:endpoint.id,method:req.method,path:'/h/[REDACTED]',query:pairs(new URL(req.originalUrl,'http://local').searchParams),headers:maskedHeaders(rawHeaders),rawBody:raw.toString('base64'),...parseBody(raw,contentType),contentType,bodySize:raw.length,responseStatus:plan.status,responseBody:plan.body,responseHeaders,responseDelayMs:plan.delayMs,source:replayAttempt?'REPLAY':testId?'TEST':'EXTERNAL',durationMs:Math.round(performance.now()-start)};
+  const result=replayAttempt&&replays?await replays.store(replayAttempt.id,data):{capture:await repo.save(data),created:true};
+  const stored=result.capture;
+  if(!result.created){
+   for(const name of res.getHeaderNames())res.removeHeader(name);
+   for(const pair of stored.responseHeaders as [string,string][])if(pair[1]!=='[REDACTED]')res.setHeader(pair[0],pair[1]);
+   res.status(stored.responseStatus).end(stored.responseBody??'');return;
+  }
   log.info({event:'REQUEST_STORED',requestId:stored.id,endpointId:endpoint.id,method:req.method});
   try {
    publish({event:'webhook:received',endpointId:endpoint.id,requestId:stored.id,method:stored.method,receivedAt:new Date(stored.receivedAt??Date.now()).toISOString()});
@@ -76,12 +88,17 @@ export function createApp(repo:Repository,key:string,origin='http://localhost:51
   res.json({outcome:delivery.outcome,response:delivery.response,durationMs:delivery.durationMs,recorded,requestId:recorded?capture.id:null});
  });
  api.get('/requests/:id',async(req,res)=>{const item=await repo.request(z.uuid().parse(req.params.id));if(!item){res.status(404).json({error:{code:'NOT_FOUND'}});return;}res.json({...item,rawEncoding:'base64'});});
+ api.post('/requests/:id/replay',rateLimit({windowMs:60_000,limit:20,legacyHeaders:false}),async(req,res)=>{const id=z.uuid().parse(req.params.id);if(!replays)throw new ReplayError(503,'REPLAY_UNAVAILABLE');res.status(202).json(await replays.create(id,req.body));});
+ api.get('/endpoints/:id/replays',async(req,res)=>{const id=z.uuid().parse(req.params.id);if(!replays)throw new ReplayError(503,'REPLAY_UNAVAILABLE');res.json(await replays.list(id,req.query));});
+ api.get('/replays/:id',async(req,res)=>{const id=z.uuid().parse(req.params.id);if(!replays)throw new ReplayError(503,'REPLAY_UNAVAILABLE');res.json(await replays.job(id));});
+ api.get('/replays/:id/attempts',async(req,res)=>{const id=z.uuid().parse(req.params.id);if(!replays)throw new ReplayError(503,'REPLAY_UNAVAILABLE');res.json(await replays.attempts(id));});
+ api.post('/replays/:id/cancel',async(req,res)=>{const id=z.uuid().parse(req.params.id);if(!replays)throw new ReplayError(503,'REPLAY_UNAVAILABLE');res.json(await replays.cancel(id));});
  app.use('/api/v1',api);
  app.use((_req,res)=>res.status(404).json({error:{code:'NOT_FOUND'}}));
  app.use((err:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>{
   const bodyError=err as {type?:string;status?:number};
-  const status=err instanceof TestLimitError?429:err instanceof z.ZodError?400:bodyError.status===413?413:bodyError.status===415?415:bodyError.status===400?400:503;
-  const code=status===429?'TEST_CONCURRENCY_LIMIT':status===413?'BODY_TOO_LARGE':status===415?'UNSUPPORTED_ENCODING':status===400?'INVALID_INPUT':'STORAGE_UNAVAILABLE';
+  const status=err instanceof ReplayError?err.status:err instanceof TestLimitError?429:err instanceof z.ZodError?400:bodyError.status===413?413:bodyError.status===415?415:bodyError.status===400?400:503;
+  const code=err instanceof ReplayError?err.code:status===429?'TEST_CONCURRENCY_LIMIT':status===413?'BODY_TOO_LARGE':status===415?'UNSUPPORTED_ENCODING':status===400?'INVALID_INPUT':'STORAGE_UNAVAILABLE';
   res.removeHeader('Content-Length');res.removeHeader('Content-Type');
   for(const name of res.getHeaderNames())if(customHeaderName.test(name))res.removeHeader(name);
   log.error({event:'REQUEST_FAILED',errorCode:code});res.status(status).json({error:{code}});

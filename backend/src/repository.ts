@@ -4,7 +4,7 @@ import { endpoints, requests,responseConfigs } from './schema.js';
 import {defaultResponseConfig,responseConfigSchema,type ResponseConfig} from './responsePolicy.js';
 import { requestConditions, requestFiltersSchema, type RequestFilters } from './requestFilters.js';
 export const repository = {
- ready:async()=>{await pool.query('SELECT source,response_body,response_headers,response_delay_ms FROM webhook_requests LIMIT 0');await pool.query('SELECT 1 FROM webhook_response_configs LIMIT 0');},
+ ready:async()=>{await pool.query('SELECT source,response_body,response_headers,response_delay_ms,replay_attempt_id FROM webhook_requests LIMIT 0');await pool.query('SELECT 1 FROM webhook_response_configs LIMIT 0');await pool.query('SELECT 1 FROM webhook_replay_attempts LIMIT 0');},
  listEndpoints:()=>db.select().from(endpoints).orderBy(desc(endpoints.createdAt)),
  createEndpoint:async(name:string,publicToken:string)=>(await db.insert(endpoints).values({name,publicToken}).returning())[0],
  endpoint:async(id:string)=>(await db.select().from(endpoints).where(eq(endpoints.id,id)))[0],

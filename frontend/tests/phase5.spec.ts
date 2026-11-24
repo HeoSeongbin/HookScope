@@ -1,0 +1,20 @@
+import {test,expect} from '@playwright/test';
+import {readFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+const key=readFileSync(new URL('../../.env',import.meta.url),'utf8').match(/^ADMIN_KEY=(.+)$/m)![1].trim();
+test('Replay Center observes real Worker success, replay bytes, bounded failure attempts and original comparison',async({page,request})=>{
+ await page.goto('/');await page.getByLabel('개발용 관리 키').fill(key);await page.getByRole('button',{name:'관리 콘솔 열기'}).click();
+ const name=`Phase 5 Replay ${Date.now()}`;await page.getByLabel('엔드포인트 이름').fill(name);await page.getByTitle('엔드포인트 생성').click();await expect(page.getByRole('button',{name,exact:true})).toBeVisible();
+ const url=await page.locator('.url-card code').innerText();const response=await request.post(url+'?tag=a&tag=b',{headers:{'Content-Type':'application/json','X-Test-Origin':'playwright'},data:{event:'phase5.replay',nested:{hello:'한국어'}}});expect(response.status()).toBe(200);const original=(await response.json()).requestId as string;
+ await expect(page.locator('.request')).toHaveCount(1);await page.locator('.request').click();await expect(page.locator('.inspector pre')).toContainText('phase5.replay');
+ await page.getByLabel('Replay 최대 시도').selectOption('2');await page.getByRole('button',{name:'Internal Replay 실행'}).click();
+ await expect(page.locator('.replay-detail h3')).toHaveText('작업 상태: 성공',{timeout:15000});await expect(page.locator('.request')).toHaveCount(2);await expect(page.locator('.request .source-test')).toHaveText('REPLAY');await expect(page.locator('.replay-attempt')).toHaveCount(1);
+ await page.getByRole('button',{name:'이 시도의 수신 기록 확인'}).click();await expect(page.locator('.inspector pre')).toContainText('한국어');
+ const originalDetail=await request.get(`/api/v1/requests/${original}`,{headers:{Authorization:`Bearer ${key}`}}).then(r=>r.json());
+ expect((await request.put(`/api/v1/endpoints/${originalDetail.endpointId}/response`,{headers:{Authorization:`Bearer ${key}`},data:{mode:'CUSTOM',status:500,contentType:'text/plain',body:'phase5 retry failure',headers:[],delayMs:0}})).status()).toBe(200);
+ await page.locator('.request').last().click();await page.getByRole('button',{name:'Internal Replay 실행'}).click();
+ await expect(page.locator('.replay-detail h3')).toHaveText('작업 상태: 실패',{timeout:15000});await expect(page.locator('.replay-attempt')).toHaveCount(2);await expect(page.locator('.replay-attempt').first()).toContainText('관측 HTTP: 500');await expect(page.locator('.replay-attempt').last()).toContainText('HTTP_500');
+ await page.getByLabel('Replay 상태 필터').selectOption('FAILED');await expect(page.locator('.replay-job')).toHaveCount(1);await page.locator('.original-comparison summary').click();await expect(page.locator('.original-comparison')).toContainText('phase5.replay');
+ await page.screenshot({path:fileURLToPath(new URL('../../docs/screenshots/phase5-desktop.png',import.meta.url)),fullPage:true});await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:fileURLToPath(new URL('../../docs/screenshots/phase5-mobile.png',import.meta.url)),fullPage:true});
+ expect((await request.put(`/api/v1/endpoints/${originalDetail.endpointId}/response`,{headers:{Authorization:`Bearer ${key}`},data:{mode:'DEFAULT'}})).status()).toBe(200);
+});

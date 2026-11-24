@@ -1,7 +1,33 @@
-# 개발 상태 — 2026-11-23
+# 개발 상태 — 2026-11-24
 
 ## 현재 Phase
-**Phase 0–4 구현·검증 완료. 다음 미완료 단계는 Phase 5이다.** 로컬 개발용 단일 관리자 MVP이며 공개 운영 준비 완료를 의미하지 않는다. 과거 Phase의 검증 기록은 이력으로 유지한다.
+**Phase 0–5 구현·검증 완료. 다음 미완료 단계는 Phase 6이다.** 로컬 개발용 단일 관리자 MVP이며 공개 운영 준비 완료를 의미하지 않는다. 과거 Phase의 검증 기록은 이력으로 유지한다.
+
+## Phase 5 구현 및 검증 (2026-11-24)
+- 필수 문서·실제 소스·Git 비교: 기준 92860db(Phase 4), 작업 전 변경 없는 상태에서 시작. 과거 커밋 전 문구는 당시 기록이며 이후 사용자 요청으로 푸시됐다. 이번 변경은 커밋·푸시하지 않았다.
+- 영향 분석: 기존 수신·Raw/Parsed 분리와 DB 이후 Socket 알림 유지. Replay 전송/정책/큐/작업 Repository/Worker를 분리하고 수신에는 서명 검증 및 중복 시도 저장 경계만 추가. 관리 인증과 원본 Endpoint 범위를 유지하며 외부 URL 전송은 구현하지 않았다.
+- PostgreSQL 작업·시도·원본 요청 연결, UUID 멱등 키, DB 상태 전이/잠금/고유 제약, 실제 HTTP 응답 이력, 대기 취소, 429/5xx 제한 재시도 및 1초·2초 백오프, 불확실/중단 UNKNOWN 구현.
+- Redis/BullMQ에는 작업 ID만 보관. 별도 Worker 동시 2개, DB PENDING outbox·5초 조정자·큐 namespace·DB 재시도 시각으로 큐 유실/중복 실행에 대응. Worker DB 확인 후 TTL heartbeat, DB readiness는 Redis와 독립 유지.
+- 고정 내부 origin/원본 Endpoint, 원본 Base64 바이트·중복 Query, 안전한 Header만 전달. HMAC proof·활성 작업/시도 확인·서명 Header 제거, 동일 시도 수신 1건 보장. SQL 오류가 Redis에 본문 파라미터를 남기지 않도록 오류 코드를 정제했다.
+- Replay Center: 생성·최대 시도·상태 필터/페이지·대기 취소, 2초 조회, 실제 관측 응답·원본 Parsed Body 비교·저장 확인된 수신 상세 연결. HTTP 예정 스냅샷과 Worker 실제 응답 구분.
+- 추가 migration 0003/0004 적용. 0003 업그레이드 전후 기존 요청 **220건 보존**. 이후 통합 테스트는 실제 fixture를 추가하므로 현재 전체 건수는 달라질 수 있다. 기존 migration은 수정하지 않았다.
+- **Vitest 119/119 통과**: 기존 92개 + Replay 정책/인증/서명/안전한 전송/한도/결과 분류 27개. HTTP 테스트의 Repository는 더블이다. 샌드박스 로컬 연결 EACCES로 실패한 검사는 권한 확장 후 전부 통과했다.
+- **실제 Compose PostgreSQL smoke 4종 통과**: 기존 수신→DB→Socket, 필터 36건, 응답/Test Sender 회귀 및 신규 Replay. Replay는 binary 바이트·멱등 생성·위조 거부·503 최대 3회 및 시간 간격·400 1회·대기 취소·실행 중 취소 거부·서명 중복 수신 1건·중단 UNKNOWN·PENDING 복구·다른 큐 namespace 격리를 검증하고 자체 데이터를 정리했다.
+- **실제 Redis stop/start 검증**: 중단 중 생성은 PENDING/enqueuePending, DB readiness 및 일반 HTTP 수신 성공. Redis 재시작 후 같은 작업이 SUCCEEDED가 됐으며 5개 서비스 모두 healthy로 복귀했다.
+- **Compose Playwright 7/7 통과**: 기존 6개 + Replay 성공·실패 2회 재시도·REPLAY 표시·원본 비교·상태 필터. 데스크톱/390px 모바일 스크린샷 및 넘침 검사. E2E 데이터는 DB에 남는다.
+- TypeScript·ESLint·Production Build 통과. Compose build/migration/기동 및 frontend/backend/worker/postgres/redis healthy. npm audit 전체/운영 모두 0건. CI에 Redis와 Replay smoke 추가; 원격 CI 실행은 미검증.
+- 미검증: 모든 강제 종료 시점·장기 부하·멀티 인스턴스·공개 운영. Exactly-once 전달 성공 보증은 하지 않는다. 통계/계정 소유권/TTL/감사/외부 Replay는 완료 처리하지 않았다.
+
+## Phase 5에서 해결한 문제
+- 실제 smoke에서 다른 큐 조정자가 작업을 가져가 백오프가 단축됐다. 0004로 queueName/nextAttemptAt을 추가하고 DB가 시간 제한을 집행하도록 수정해 재검증했다.
+- 기존 EndpointTools와 새 ReplayCenter의 동일 sibling key가 React 상태를 초기화했다. 컴포넌트별 접두사로 분리했다. 새 갱신 버튼/페이지 CSS와 기존 E2E 선택자 충돌도 고쳤으며 최종 7개 회귀가 통과했다.
+- BullMQ Redis client의 SET 인자 형식 차이를 타입 검사에서 발견해 구조화 EX 옵션으로 수정했다. Worker 오류는 SQL 원인을 Redis에 전달하지 않도록 정제했다.
+
+## Phase 5 변경 파일
+- backend/src/replayPolicy.ts, replayTransport.ts, replayRepository.ts, replayQueue.ts, replayService.ts, replayWorker.ts, worker.ts, workerHealth.ts, replaySmoke.ts 및 tests/replay.test.ts 신규.
+- backend/migrations/0003_internal_replay.sql, 0004_replay_deadline_and_namespace.sql 신규; app.ts/repository.ts/schema.ts/server.ts/package.json 수정.
+- frontend/src/ReplayCenter.tsx 및 tests/phase5.spec.ts 신규; main.tsx/types.ts/style.css 수정. Phase 5 화면 신규, Phase 1–4 E2E 화면 재생성.
+- docker-compose.yml, .env.example, .github/workflows/ci.yml, package-lock.json과 PROJECT.md/README.md/DECISIONS.md/ARCHITECTURE.md/TEST-SCENARIOS.md/openapi.yaml 갱신. .env는 제외.
 
 ## Phase 4 구현 및 검증 (2026-11-23)
 - 필수 문서·소스·Git 비교 후 main이 origin/main과 같고 변경이 없는 기준 bd2e1e0에서 시작했다. 기존 테스트 45개를 재확인했다. Phase 3의 커밋 전 문구는 당시 이력이며 이후 사용자 요청으로 bd2e1e0를 푸시했다.

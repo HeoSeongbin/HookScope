@@ -4,6 +4,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-retries 10
       postgres:
         image: postgres:17-alpine
         env:
@@ -14,6 +18,7 @@ jobs:
         options: --health-cmd "pg_isready -U hookscope" --health-interval 5s --health-retries 10
     env:
       DATABASE_URL: postgresql://hookscope:test-only@localhost:5432/hookscope
+      REDIS_URL: redis://127.0.0.1:6379
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,3 +34,4 @@ jobs:
       - run: npm run smoke -w backend
       - run: npm run smoke:filters -w backend
       - run: npm run smoke:response -w backend
+      - run: npm run smoke:replay -w backend

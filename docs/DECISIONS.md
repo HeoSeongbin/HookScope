@@ -1,5 +1,15 @@
 # Architecture Decision Records
 
+## ADR-016 · PostgreSQL 작업 이력과 Redis 전달 분리 (채택, Phase 5)
+작업/시도/원본 연결과 멱등성은 PostgreSQL이 관리하고 BullMQ에는 replayId만 저장한다. PENDING을 먼저 커밋하고 enqueue 실패는 대기 상태로 남긴다. 조정자가 5초마다 같은 큐 namespace의 미완료 작업을 복구한다. 세션 advisory lock, 작업 행 잠금, 시도 번호·예약 Request ID·replayAttemptId 고유 제약을 함께 사용한다. 큐 ID만으로 exactly-once를 주장하지 않는다.
+실제 smoke에서 서로 다른 큐의 조정자가 작업을 가져가 백오프가 짧아지는 문제를 발견했다. 적용한 0003을 수정하지 않고 0004로 queueName과 nextAttemptAt을 영속화했다. Worker 시작도 DB의 재시도 시각을 검사하므로 큐 유실/재등록이 재시도 제한을 우회하지 못한다.
+
+## ADR-017 · 서명된 자체 Endpoint Replay (채택, Phase 5)
+별도 Worker와 API 사이에서는 메모리 일회용 토큰을 공유할 수 없다. HMAC을 시도/예약 Request ID/Endpoint/Method/원본 본문 해시/정규화 Query에 결합하고 활성 DB 상태도 검사한다. 관리자 키는 전송하지 않으며 예약 Header는 이력에서 제거한다. 고정 내부 origin과 원본 Endpoint만 허용하고 사용자 URL·인증/쿠키/연결 Header·redirect를 배제한다. DB 오류의 SQL/본문 파라미터가 Redis failedReason에 남지 않게 Worker 오류를 고정 코드로 치환한다.
+
+## ADR-018 · 불확실한 결과와 제한된 재시도 (채택, Phase 5)
+429/5xx의 확인된 응답만 최대 3회, 1초·2초 백오프로 재시도한다. timeout/전송 실패/중단된 RUNNING은 실제 수신 여부가 불확실하므로 UNKNOWN으로 종료한다. 대기 작업만 취소하며 실행 중 취소로 전송 중단을 약속하지 않는다. 실제 HTTP 응답·시도 소요시간은 Worker 이력에, 수신 예정 응답은 기존 요청 snapshot에 분리한다. signed 중복 수신은 시도 행 잠금으로 하나만 저장한다. Redis 중단에도 일반 수신과 DB readiness를 유지하며 Worker heartbeat는 별도로 점검한다.
+
 ## ADR-001 · Express 5와 Drizzle (채택)
 HTTP 수신 및 미들웨어 경계를 명시하기 위해 Express를 사용한다. 작은 Phase 1 모델과 PostgreSQL JSONB를 직접 다루고 SQL 마이그레이션을 검토하기 위해 Drizzle을 선택한다. npm audit 결과에 따라 Drizzle 0.45.4와 Vitest 5.1.0으로 상향했다.
 
@@ -9,8 +19,8 @@ ADMIN_KEY로 모든 관리 API를 보호하고 24바이트 난수 publicToken은
 ## ADR-003 · 원본 바이트 및 중복값 (채택)
 express.raw inflate:false와 Base64 text 저장으로 UTF-8 정규화 없이 원본 바이트를 복구한다. JSON 파싱 실패도 정상 기록한다. 중복 헤더는 쌍 배열, Query/Form은 값 배열. 민감 헤더는 저장 전 제거하므로 헤더 원문 전체 보존보다 비밀 보호를 우선한다.
 
-## ADR-004 · 실시간·Redis·Replay (계획)
-PostgreSQL을 기록의 기준으로 유지한다. Phase 2의 Socket.IO 인증 Room, 저장 후 이벤트 발행 및 재연결 REST 재조회는 구현했다. 멀티 인스턴스는 Redis adapter와 공유 limiter 필요. Phase 5에 BullMQ Internal Replay, DB 시도 이력, 제한된 재시도·백오프·중복 실행 방지를 구현한다. 현재 Worker와 Redis adapter는 없다.
+## ADR-004 · 실시간·Redis·Replay (부분 채택)
+PostgreSQL을 기록의 기준으로 유지한다. Phase 2의 인증 Room과 REST 동기화, Phase 5의 BullMQ Internal Replay Worker를 구현했다. Socket.IO Redis adapter 및 공유 limiter는 아직 제공하지 않는다.
 
 ## ADR-008 · 인증된 단일 Endpoint Room (채택, Phase 2)
 REST와 Socket에 공통 상수 시간 관리자 키 검증을 적용한다. Socket handshake.auth로 키를 전달하고 URL/query/localStorage에는 보관하지 않는다. 공개 수신 토큰은 Socket 인증에 사용할 수 없다. 서버에서 UUID·Endpoint 존재·관리 권한을 확인한 뒤 endpoint:{id} Room에 가입한다. 현재 단일 관리자는 모든 기존 Endpoint 권한이 있으며 사용자별 소유권은 Phase 7이다. 임의 room 이름을 받지 않는다. 구독 변경 시 이전 Room을 떠나고 Socket 종료 시 정리한다. 브라우저 Origin은 polling과 WebSocket 모두 검사한다.

@@ -15,6 +15,7 @@ services:
       retries: 20
   redis:
     image: redis:7-alpine
+    ports: ["127.0.0.1:${REDIS_PORT:-6379}:6379"]
     command: ["redis-server", "--appendonly", "yes"]
     volumes: ["redis_data:/data"]
     restart: unless-stopped
@@ -32,6 +33,7 @@ services:
       ADMIN_KEY: ${ADMIN_KEY:?Set ADMIN_KEY in .env}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:8088}
       PORT: 3000
+      REDIS_URL: redis://redis:6379
     ports: ["127.0.0.1:3000:3000"]
     depends_on:
       postgres:
@@ -39,6 +41,27 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  worker:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    command: ["node", "dist/worker.js"]
+    environment:
+      DATABASE_URL: postgresql://hookscope:${POSTGRES_PASSWORD}@postgres:5432/hookscope
+      ADMIN_KEY: ${ADMIN_KEY:?Set ADMIN_KEY in .env}
+      REDIS_URL: redis://redis:6379
+      INTERNAL_API_ORIGIN: http://backend:3000
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "dist/workerHealth.js"]
       interval: 10s
       timeout: 5s
       retries: 10

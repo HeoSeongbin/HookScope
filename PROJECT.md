@@ -3,10 +3,10 @@
 Webhook Testing & Monitoring Platform. 실제 HTTP 요청을 수신하고 PostgreSQL에 영속 저장하여 개발자가 내용을 분석하는 포트폴리오 프로젝트다.
 
 ## 이번 범위
-Phase 0–3의 수신·저장·실시간·검색·분석을 유지한다. 이번 작업은 Phase 4의 사용자 정의 응답과 자체 Endpoint Test Sender만 구현한다. Replay, BullMQ 및 외부 URL 전송은 포함하지 않는다.
+Phase 0–4의 기능을 유지하고 Phase 5 Internal Replay, Redis/BullMQ Worker 및 PostgreSQL 작업·시도 이력을 구현한다. 외부 URL 전송과 통계는 포함하지 않는다.
 
 ## 기술 스택
-Node.js 24 LTS, TypeScript strict, Express 5, Drizzle ORM 및 node-postgres, PostgreSQL 17, Zod, Pino, React 19, Vite 8, Vitest 5, Supertest. 실제 설치 버전은 package-lock.json이 기준이다. Redis 7은 향후 큐용으로 Compose에 준비하되 Phase 1 수신 경로에서는 사용하지 않는다.
+Node.js 24 LTS, TypeScript strict, Express 5, Drizzle ORM 및 node-postgres, PostgreSQL 17, Zod, Pino, React 19, Vite 8, Vitest 5, Supertest, Redis 7 및 BullMQ 5. 실제 설치 버전은 package-lock.json이 기준이다. Redis는 Replay 작업 전달에 사용하며 일반 수신 경로에서는 사용하지 않는다.
 
 ## 아키텍처 및 처리 흐름
 React → 인증된 REST API → Repository → Drizzle → PostgreSQL.
@@ -16,7 +16,7 @@ HTTP 책임은 app.ts, 파싱은 body.ts, 영속화는 repository.ts, DB 모델�
 
 ## 데이터 모델
 webhook_endpoints: UUID PK, 이름, 암호학적 192bit publicToken UNIQUE, enabled, UTC createdAt.
-webhook_requests: UUID PK, Endpoint FK CASCADE, method, 토큰이 제거된 path, 중복값 배열 query JSONB, 순서 및 중복을 보존한 마스킹 headers JSONB, rawBody Base64, parsedBody JSONB, parseError, contentType, bodySize, receivedAt UTC, responseStatus, durationMs, source(EXTERNAL/TEST), responseBody/responseHeaders/responseDelayMs 계획 스냅샷.
+webhook_requests: UUID PK, Endpoint FK CASCADE, method, 토큰이 제거된 path, 중복값 배열 query JSONB, 순서 및 중복을 보존한 마스킹 headers JSONB, rawBody Base64, parsedBody JSONB, parseError, contentType, bodySize, receivedAt UTC, responseStatus, durationMs, source(EXTERNAL/TEST/REPLAY), replayAttemptId UNIQUE FK, responseBody/responseHeaders/responseDelayMs 계획 스냅샷.
 webhook_response_configs: Endpoint UUID PK/FK CASCADE, mode, status, contentType, body, headers JSONB, delayMs, updatedAt. 설정 upsert는 원자적이며 요청별 스냅샷은 이후 설정 변경으로 수정하지 않는다.
 인덱스: endpointId + receivedAt. durationMs는 DB insert 전 캡처 준비 시간으로 전체 응답 지연이 아니다. 응답 상태는 예정 응답이며 실제 소켓 전달 보증이 아니다. 실제 finish는 별도 RESPONSE_SENT 로그로 기록한다.
 
@@ -32,17 +32,27 @@ GET /health/live, /health/ready. 오류는 {error:{code}} 규약.
 단일 로컬 관리자 ADMIN_KEY(32자 이상) Bearer 인증. 공개 토큰과 완전히 분리하며 모든 관리 API에 인증을 적용한다. Socket.IO handshake.auth.token에도 동일한 관리자 키를 검증한다. 이 로컬 관리자는 모든 기존 Endpoint를 관리할 수 있으나 공개 수신 토큰으로는 Socket 연결할 수 없다. 계정별 소유권은 Phase 7 대상이다.
 키는 React 메모리에만 저장한다. 수신 Body 256KiB, 관리 JSON 16KiB, 수신 URL 8KiB, Node 기본 Header 제한 16KiB. 압축 Body는 415. 수신 IP별 120회/분, 관리 IP별 300회/분의 단일 프로세스 제한.
 인증/쿠키/API 키 계열 헤더는 저장 전에 마스킹한다. 그 외 본문·쿼리에는 비밀값이 포함될 수 있다. React 텍스트 렌더링으로 실행을 방지한다. IP는 저장하지 않는다. 토큰 경로와 Body는 로그에 남기지 않는다.
-외부 URL 전송·Replay는 이번 범위에서 제공하지 않는다. 기본 응답은 200 {requestId,message:'Request recorded'}. 사용자 정의 응답은 아래 Phase 4 제한을 따른다. 공통 보안 헤더와 허용 origin CORS를 적용한다.
+외부 URL 전송은 제공하지 않는다. Internal Replay는 아래 Phase 5 계약을 따른다. 기본 응답은 200 {requestId,message:'Request recorded'}. 사용자 정의 응답은 아래 Phase 4 제한을 따른다. 공통 보안 헤더와 허용 origin CORS를 적용한다.
 보관 자동 정리·전체 저장량 한도는 Phase 7로 예정. Phase 1 데이터는 수동 삭제 전까지 유지되므로 로컬 개발에서만 사용한다. 공개 서비스 준비 완료로 간주하지 않는다.
 
 ## 향후 Phase 및 최종 조건
-2: Socket.IO 인증 Room·재연결 REST 동기화. 3: 검색·필터·JSON Tree. 4: 응답 설정·자체 Test Sender(이번 구현). 5: BullMQ Internal Replay·시도 기록·백오프. 6: 실제 DB 기반 통계. 7: 사용자별 권한·만료·보관·감사. 8: 테마·접근성·성능. 9: E2E·공개 포트폴리오 문서 및 시연.
+2: Socket.IO 인증 Room·재연결 REST 동기화. 3: 검색·필터·JSON Tree. 4: 응답 설정·자체 Test Sender. 5: BullMQ Internal Replay·시도 기록·백오프(이번 구현). 6: 실제 DB 기반 통계. 7: 사용자별 권한·만료·보관·감사. 8: 테마·접근성·성능. 9: E2E·공개 포트폴리오 문서 및 시연.
 Replay는 PostgreSQL 작업/시도 이력과 멱등성 제약을 함께 설계하며 Job ID만 신뢰하지 않는다. 외부 전송은 허용 목록, DNS/IP 검증, redirect 금지, timeout 및 응답 크기 제한 후 별도 제공한다.
 Socket.IO는 DB 저장 이후 식별자 이벤트만 발행하고 REST 재조회가 정합성의 기준이 된다. 멀티 인스턴스에서는 Redis adapter와 공유 rate limiter가 필요하다.
-최종 완료는 사용자 원문 28절의 전체 기능 및 테스트 조건을 충족한 시점이며, 현재는 최초 Phase 검증만 평가한다.
+최종 완료는 사용자 원문 28절의 전체 기능 및 테스트 조건을 충족한 시점이며, 현재는 Phase 0–5의 구현 및 명시한 검증 범위만 완료로 평가한다.
 
 ## 테스트 전략
 파서/브라우저 이벤트 중복 방지 단위 테스트, Supertest 및 실제 Socket 클라이언트 통합 테스트, 실제 PostgreSQL HTTP→DB→Socket→REST 스모크 테스트, Compose 기반 브라우저 E2E를 구분한다. 타입 검사, ESLint, Production Build를 실행한다. 결과 및 차단 사항은 docs/PROGRESS.md 참조.
+
+## Phase 5 Internal Replay 계약
+- 관리 인증 후 원본 요청과 활성 Endpoint를 확인한다. POST /api/v1/requests/:id/replay는 UUID idempotencyKey와 maxAttempts(1–3, 기본 3)를 받는다. 같은 키·원본·시도 한도는 같은 작업을 반환하고 다른 입력 재사용은 409다. 관리 IP별 20회/분 제한이며 사용자 목적지 URL은 받지 않는다.
+- GET /api/v1/endpoints/:id/replays는 page/status 필터 및 30건 페이지, GET /api/v1/replays/:id와 /attempts는 작업/최대 3개 시도, POST /api/v1/replays/:id/cancel은 대기·재시도 작업만 취소한다. RUNNING/종료 작업은 409이며 CANCELLED 재취소는 멱등이다.
+- PostgreSQL webhook_replay_jobs가 상태·원본·Endpoint·멱등 키·queueName·nextAttemptAt을 보관한다. webhook_replay_attempts는 고유 (jobId, number) 및 사전 예약 requestId, 실제 관측 HTTP 응답·소요시간·오류를 보관한다. webhook_requests.source는 REPLAY를 추가하고 replayAttemptId UNIQUE FK로 연결한다. Raw Body와 Parsed Body는 변경하지 않는다. migration 0003/0004를 추가하며 기존 파일은 수정하지 않는다.
+- Redis/BullMQ에는 replayId만 넣는다. DB PENDING 저장 후 enqueue하며 실패해도 202/enqueuePending으로 작업을 유지한다. 5초 주기 조정자가 같은 queueName의 미완료 작업 최대 50개를 복구한다. 큐 유실 재등록에도 DB의 nextAttemptAt이 백오프를 지킨다.
+- 별도 Worker(동시 2개)는 PostgreSQL advisory lock 및 트랜잭션으로 시도를 예약한다. 2xx 성공, 429/5xx만 1초·2초 백오프와 최대 3회 제한을 적용한다. 다른 HTTP 응답은 실패다. timeout/전송 불확실성/중단된 RUNNING은 UNKNOWN으로 종료하고 자동 재전송하지 않는다. Exactly-once 또는 모든 장애에서 전달 성공을 보증하지 않는다.
+- 목적지는 운영자가 설정한 INTERNAL_API_ORIGIN의 http backend/127.0.0.1/localhost와 원본 Endpoint의 고정 /h/:token이다. 원본 바이트·중복 Query·Content-Type을 보내며 허용 X-Test-/X-Mock-/X-Custom-/Accept/User-Agent만 전달한다. Authorization/Cookie/Host/hop Header와 마스킹 값은 제외한다. redirect 금지, 전체 5초, 응답 Header/Body 각 16KiB, URL 8KiB 제한이다.
+- HMAC 출처 증명은 시도·예약 Request ID·Endpoint·Method·본문 해시·Query에 결합한다. 관리자 키를 HTTP에 전달하지 않는다. 유효한 RUNNING 작업/시도만 REPLAY 수신을 허용하며 증명 Header는 저장하지 않는다. 시도 행 잠금과 고유 제약으로 동일 시도의 중복 수신을 한 기록으로 연결하고 새 알림도 한 번만 발행한다.
+- UI는 작업 상태/필터·시도별 관측 응답·원본 Parsed Body 비교·확인된 수신 상세 링크를 제공하고 활성 탭에서 2초마다 조회한다. 실제 응답과 수신 시점 계획 스냅샷을 구분한다. DB 준비 상태는 Redis와 독립적이며 Worker는 DB 확인 후 Redis에 TTL 15초 heartbeat를 갱신한다.
 
 ## Phase 2 실시간 계약
 - /socket.io/의 polling 및 WebSocket 연결. Origin 허용 목록과 관리자 키 검증, 최대 메시지 크기 16KiB.

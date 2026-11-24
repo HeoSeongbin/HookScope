@@ -1,13 +1,105 @@
 openapi: 3.1.0
 info:
-  title: HookScope Phase 4 API
-  version: 0.4.0
-  description: Authenticated endpoint management, filters, response configuration and loopback-only Test Sender. Full policies are documented in PROJECT.md.
+  title: HookScope Phase 5 API
+  version: 0.5.0
+  description: Authenticated management, filters, response configuration, Test Sender and internal-only durable Replay. Errors use an error object with a code string. Full policies are documented in PROJECT.md.
 servers:
   - url: http://localhost:8088
 security:
   - AdminKey: []
 paths:
+  /api/v1/requests/{id}/replay:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      summary: Create or return an idempotent replay to the original active endpoint
+      description: No destination URL accepted. 20 calls per minute per management IP. Redis failure retains PostgreSQL PENDING and returns enqueuePending true.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [idempotencyKey]
+              properties:
+                idempotencyKey: {type: string, format: uuid}
+                maxAttempts: {type: integer, minimum: 1, maximum: 3, default: 3}
+      responses:
+        '202':
+          description: Persisted job; acceptance does not guarantee delivery
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ReplayJob'
+                  - type: object
+                    properties:
+                      enqueuePending: {type: boolean}
+        '400': {description: Invalid input or unsupported original payload}
+        '401': {description: Unauthorized}
+        '404': {description: Original request not found}
+        '409': {description: Disabled endpoint or idempotency key conflict}
+        '429': {description: Rate limit exceeded}
+  /api/v1/endpoints/{id}/replays:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      summary: List endpoint replay jobs with same-snapshot total
+      parameters:
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 10000, default: 1}
+        - name: status
+          in: query
+          schema: {$ref: '#/components/schemas/ReplayStatus'}
+      responses:
+        '200': {description: 'items, total, page, pageSize (30); ordered by createdAt and UUID descending'}
+        '400': {description: Invalid or unknown query key}
+        '401': {description: Unauthorized}
+        '404': {description: Endpoint not found}
+  /api/v1/replays/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      summary: Read a replay job
+      responses:
+        '200':
+          description: PostgreSQL job state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReplayJob'}
+        '401': {description: Unauthorized}
+        '404': {description: Replay not found}
+  /api/v1/replays/{id}/attempts:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      summary: Read up to three attempts in ascending attempt number
+      responses:
+        '200':
+          description: Actual observed HTTP results; distinct from capture planned response snapshots
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    maxItems: 3
+                    items: {$ref: '#/components/schemas/ReplayAttempt'}
+        '401': {description: Unauthorized}
+        '404': {description: Replay not found}
+  /api/v1/replays/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      summary: Cancel PENDING, QUEUED or RETRYING; repeat CANCELLED is idempotent
+      responses:
+        '200': {description: Cancelled job}
+        '401': {description: Unauthorized}
+        '404': {description: Replay not found}
+        '409': {description: Running or terminal job cannot be cancelled}
   /api/v1/endpoints:
     get:
       summary: List endpoints
@@ -166,6 +258,41 @@ paths:
         '503': {description: Database not ready}
 components:
   schemas:
+    ReplayStatus:
+      type: string
+      enum: [PENDING, QUEUED, RUNNING, RETRYING, SUCCEEDED, FAILED, CANCELLED, UNKNOWN]
+    ReplayJob:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        endpointId: {type: string, format: uuid}
+        originalRequestId: {type: string, format: uuid}
+        idempotencyKey: {type: string, format: uuid}
+        maxAttempts: {type: integer, minimum: 1, maximum: 3}
+        status: {$ref: '#/components/schemas/ReplayStatus'}
+        queueName: {type: string}
+        nextAttemptAt: {type: [string, 'null'], format: date-time}
+        lastError: {type: [string, 'null']}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    ReplayAttempt:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        jobId: {type: string, format: uuid}
+        number: {type: integer, minimum: 1, maximum: 3}
+        requestId: {type: string, format: uuid, description: Reserved ID; link only when captured is true}
+        captured: {type: boolean}
+        status: {type: string, enum: [RUNNING, SUCCEEDED, FAILED, UNKNOWN]}
+        responseStatus: {type: [integer, 'null']}
+        responseBody: {type: [string, 'null']}
+        responseHeaders:
+          type: [array, 'null']
+          items: {$ref: '#/components/schemas/Pair'}
+        durationMs: {type: [integer, 'null']}
+        errorCode: {type: [string, 'null']}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: [string, 'null'], format: date-time}
     Pair:
       type: array
       minItems: 2

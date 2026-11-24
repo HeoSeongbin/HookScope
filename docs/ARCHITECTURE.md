@@ -1,4 +1,15 @@
-# Phase 1–4 아키텍처
+# Phase 1–5 아키텍처
+
+## Phase 5 재전송 경계
+replayPolicy.ts는 입력·안전한 Header·고정 내부 origin·HMAC·결과 분류, replayTransport.ts는 실제 HTTP 및 5초/16KiB 제한을 담당한다. replayService.ts는 관리 API 조합과 durable outbox 조정, replayRepository.ts는 PostgreSQL 작업/시도/중복 수신 트랜잭션을 담당한다. replayQueue.ts는 BullMQ 연결과 제한된 enqueue 대기, replayWorker.ts는 실행/재시도 상태, worker.ts/workerHealth.ts는 별도 프로세스와 DB 확인 후 heartbeat를 담당한다.
+
+인증된 생성 → 원본/활성 Endpoint 검증 → DB PENDING → Redis 작업 ID → Worker PG advisory lock → 시도/예약 Request ID 커밋 → 서명된 고정 내부 HTTP → 기존 수신·DB·Socket 흐름 → 실제 관측 응답을 시도/작업에 저장한다. QUEUED/RUNNING/RETRYING/SUCCEEDED/FAILED/CANCELLED/UNKNOWN을 DB가 관리한다. 429/5xx만 최대 3회 재시도하고 불확실 결과는 UNKNOWN이다.
+
+API의 5초 조정자는 같은 queueName의 미완료 50개만 검사한다. Redis 유실/재등록 시에도 DB nextAttemptAt을 지킨다. 동일 시도 수신은 행 잠금·고유 FK로 한 기록에 연결한다. 일반 수신은 Redis를 사용하지 않으며 DB readiness와 Worker heartbeat를 구분한다. Compose는 별도 worker를 추가한 다섯 서비스다. Redis는 로컬 소스 개발용 loopback 6379도 제공한다.
+
+ReplayCenter.tsx는 작업 상태/페이지·취소·시도별 HTTP 결과·원본 비교를 제공하고 활성 탭에서 2초 polling한다. Socket은 기존처럼 수신 메타데이터만 전달하며 작업 상태의 기준은 REST/DB다. EndpointTools와 ReplayCenter의 key를 구분해 컴포넌트 상태를 보존한다.
+
+아래는 Phase 1–4의 유지된 구성이다.
 
 frontend/src/main.tsx: 메모리 내 관리자 키, Endpoint 선택, 수동 REST 조회 및 상세 보기.
 frontend/src/useRealtime.ts: Socket 연결·구독·재연결·정리 및 REST 재조회 예약.

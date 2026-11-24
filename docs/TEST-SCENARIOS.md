@@ -1,4 +1,4 @@
-# Phase 1–4 검증
+# Phase 1–5 검증
 
 ## 자동화
 1. Vitest/Supertest: 관리 인증, 생성 토큰, JSON 원본 바이트, 중복 Query, 비밀 헤더 마스킹, malformed JSON, GET/PUT/PATCH/DELETE, 256KiB 초과, DB 실패, 토큰/메서드 거부, 입력 검증, live/ready, Text/Form/Binary 파싱, 중복 헤더 및 프로토타입 키.
@@ -32,4 +32,11 @@ Docker Desktop 실행 후 README의 Compose 명령으로 전체 서비스를 올
 5. 실제 PostgreSQL response smoke: 설정 테이블 저장, Test Sender로 한국어 원본 바이트 및 중복 Query 수신, TEST/source·Request ID·응답 snapshot 확인, 422/204, 설정 변경 후 과거 기록 불변, 기본 복원·외부 위조 거부. 자체 데이터 정리.
 6. Compose E2E: 응답 설정 저장→실제 전송 결과와 TEST 배지→상세/Query/Response→204→기본 모드→외부 요청, 다른 Endpoint 기본값 및 재선택한 설정 영속화, 데스크톱/모바일 가로 넘침 검증.
 
-Replay·외부 전송·계정별 소유권·TTL·부하·멀티 인스턴스 검증은 후속 Phase 대상이며 통과 처리하지 않는다.
+## Phase 5 추가 검증
+1. 단위/Repository 더블 및 실제 HTTP: UUID 멱등 입력·상태 필터·관리 인증·공개 키 거부, URL/인증/쿠키/연결 Header 배제, 원본 binary/중복 Query, 서명 결합·위조, 응답 분류·timeout·16KiB·redirect 미추적.
+2. 실제 PostgreSQL + Redis + BullMQ smoke: 멱등 작업 생성·종료 후 재처리 무효, 서명 위조 403, binary 바이트, 503 세 번과 1초·2초 간격, 400 한 번, paused 큐 대기 취소·실행 중 취소 거부, 동시에 보낸 signed 중복 수신 1건, 중단 RUNNING→UNKNOWN 무전송, DB PENDING 복구·다른 큐 namespace 격리. 자체 DB/Redis fixture 정리.
+3. 실제 Redis stop/start: Redis 중단 중 enqueuePending/PENDING, DB ready 및 일반 수신 유지, Redis 재시작 후 SUCCEEDED와 전체 컨테이너 healthy 복귀 확인.
+4. Compose E2E: 원본 선택→Replay 성공→REPLAY 수신 상세→500 응답 설정 후 최대 2회 실패→원본 비교·시도 응답·상태 필터→기본 응답 복원. 데스크톱/390px 모바일 화면·넘침 확인. 기존 6개와 총 7개 통과.
+5. 기존 요청 220건을 보존한 추가 migration 0003/0004, 타입/Lint/Production Build 및 네 smoke 회귀 확인. 테스트 더블 119개와 실제 DB/Redis smoke 결과를 구분한다.
+
+외부 전송·계정별 소유권·TTL·부하·멀티 인스턴스·모든 강제 종료 시점 검증은 후속 대상이며 통과 처리하지 않는다.
