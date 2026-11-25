@@ -1,7 +1,32 @@
-# 개발 상태 — 2026-11-24
+# 개발 상태 — 2026-11-25
 
 ## 현재 Phase
-**Phase 0–5 구현·검증 완료. 다음 미완료 단계는 Phase 6이다.** 로컬 개발용 단일 관리자 MVP이며 공개 운영 준비 완료를 의미하지 않는다. 과거 Phase의 검증 기록은 이력으로 유지한다.
+**Phase 0–6 구현·검증 완료. 다음 미완료 단계는 Phase 7이다.** 로컬 개발용 단일 관리자 MVP이며 공개 운영 준비 완료를 의미하지 않는다. 과거 Phase의 검증 기록은 이력으로 유지한다.
+
+## Phase 6 구현 및 검증 (2026-11-25)
+- 필수 문서·원문 Phase 6 요구·실제 소스·Git 비교: 기준 9e118e9(Phase 5), 작업 전 변경 없음. 과거 Phase 5 커밋 전 문구는 당시 이력이며 이후 사용자 요청으로 9e118e9를 푸시했다. 이번 작업은 아직 커밋·푸시하지 않았다.
+- 기존 Vitest 119개를 먼저 재확인했다. 영향 분석 후 수신·DB 저장·Raw/Parsed·Socket·Replay 전송에는 집계 쓰기를 넣지 않고 읽기 전용 Analytics 모듈/API/UI만 분리했다. 인증된 전체 Dashboard와 원본 Endpoint 범위를 유지한다. 외부 HTTP 기능은 변경하지 않았다.
+- GET dashboard/summary 및 endpoints/:id/statistics 구현. 엄격한 from/to(명시적 시간대·기본 24시간·최대 31일·시작 포함/종료 미포함), 동일 REPEATABLE READ READ ONLY 스냅샷, SQL 바인딩 및 쿼리별 5초 timeout.
+- 보관 전체/기간/최근 1시간 건수, Method·예정 Status·출처·UTC 시간별 차트 데이터·Endpoint 상위 10개·최근 수신/오류 5개 집계. 빈 버킷만 0으로 채우며 본문/Header/Query/공개 토큰은 통계에 포함하지 않는다. 조회 실패는 503이다.
+- 캡처 준비 평균/P95와 Replay 실제 HTTP 평균/P95·측정 시도 수를 구분한다. 예정 오류 상태와 파싱 오류는 중복 가능하며 업무 실패율로 표현하지 않는다. 미측정 값은 null이다.
+- Analytics UI: 선택 Endpoint/전체 범위, 24시간/7일/사용자 기간, SVG 차트·수치 표·분포 막대·최근 오류 상세, 활성 탭 15초 polling·탭 복귀/수동 갱신·이전 조회 무시. 다른 Endpoint의 최근 요청도 해당 Endpoint 상세로 이동한다.
+- 0005는 수신/Replay 시작 시각 인덱스만 추가. ledger 적용 확인 및 재실행 전후 **요청 467건·Replay 작업 10건·시도 14건 유지**. 이 수치는 재실행 당시이며 이후 E2E fixture로 증가한다. 과거 원문/응답/시간 값을 수정하는 migration은 없다.
+- **Vitest 137/137 통과**: 기존 119개 + 범위 검증·잘못된 offset·관리 인증/공개 키 거부·Endpoint 존재/ID·중복 query·전역/Endpoint 전달·DB 실패 18개. API Repository는 더블이며 실제 DB 검증과 구분한다.
+- **실제 PostgreSQL/Redis Compose smoke 5종 통과**: 기존 수신/Socket·필터·응답/Test Sender·Replay 회귀, 신규 Analytics. Analytics는 실제 수신 6건 후 시각/상태/출처/준비 시간과 Replay 시도 fixture를 설정해 경계·offset·부분 시간·745버킷·합계/분포·Endpoint 격리·P95·null·원문 미노출을 검증하고 자체 데이터를 정리한다.
+- **Compose Playwright 8/8 통과**: 기존 7개 회귀 및 Analytics 실제 200/500/204·파싱 오류 집계, 최근 오류 상세, 빈 기간과 전체 보관 수 구분, Endpoint 격리/전체 Dashboard, 데스크톱/390px 모바일 가로 넘침. E2E fixture는 실제 DB에 남는다.
+- TypeScript·ESLint·Production Build 통과. Compose 이미지 빌드/0005 migration/기동 성공, frontend/backend/worker/postgres/redis 모두 healthy. 새 의존성 없음; Compose npm ci 취약점 0건. CI에 analytics smoke 추가, 원격 CI 실행은 미검증.
+- 미검증/범위 밖: 대규모 Analytics 부하·전체 wire 응답시간 수집·멀티 인스턴스·공개 운영·사용자별 소유권/TTL/감사. 기존 단일 관리자 권한을 계정별 권한 완료로 표현하지 않는다.
+
+## Phase 6에서 해결한 문제
+- Docker 엔진이 종료돼 있었다. 설치 위치를 확인하고 Docker Desktop CLI로 시작해 실제 검증을 진행했다.
+- 로컬에서는 통과한 frontend의 서버 타입 import가 독립 Docker 이미지에서 실패했다. frontend REST DTO를 분리해 backend 소스 의존 없이 빌드하도록 수정했다.
+- Playwright 문자열 data의 자동 JSON 직렬화로 malformed JSON이 정상 문자열이 됐다. Buffer로 실제 잘못된 바이트를 보내 파싱 오류 집계와 상세를 검증했다.
+
+## Phase 6 변경 파일
+- backend/src/analyticsPolicy.ts, analyticsRepository.ts, analyticsSmoke.ts, tests/analytics.test.ts 및 migrations/0005_analytics_indexes.sql 신규.
+- backend/src/app.ts/server.ts/schema.ts/package.json 및 .github/workflows/ci.yml 수정. 기존 수신/큐/Worker 모듈은 유지.
+- frontend/src/AnalyticsPanel.tsx/analyticsTypes.ts와 tests/phase6.spec.ts 신규; main.tsx/style.css 수정. Phase 6 화면 신규, 이전 E2E 화면 재생성.
+- PROJECT.md/README.md 및 docs/PROGRESS.md/DECISIONS.md/ARCHITECTURE.md/TEST-SCENARIOS.md/openapi.yaml 갱신. .env 제외, 커밋·푸시는 하지 않았다.
 
 ## Phase 5 구현 및 검증 (2026-11-24)
 - 필수 문서·실제 소스·Git 비교: 기준 92860db(Phase 4), 작업 전 변경 없는 상태에서 시작. 과거 커밋 전 문구는 당시 기록이며 이후 사용자 요청으로 푸시됐다. 이번 변경은 커밋·푸시하지 않았다.

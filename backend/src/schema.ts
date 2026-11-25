@@ -14,7 +14,7 @@ export const requests = pgTable('webhook_requests', {
   responseBody:text('response_body'),responseHeaders:jsonb('response_headers'),
   responseDelayMs:integer('response_delay_ms').notNull().default(0),source:text('source').notNull().default('EXTERNAL')
   ,replayAttemptId:uuid('replay_attempt_id').unique().references(():AnyPgColumn=>replayAttempts.id,{onDelete:'set null'})
-},t=>[index('requests_endpoint_time_idx').on(t.endpointId,t.receivedAt)]);
+},t=>[index('requests_endpoint_time_idx').on(t.endpointId,t.receivedAt),index('requests_received_time_idx').on(t.receivedAt)]);
 export const responseConfigs=pgTable('webhook_response_configs',{
   endpointId:uuid('endpoint_id').primaryKey().references(()=>endpoints.id,{onDelete:'cascade'}),
   mode:text('mode').notNull().default('DEFAULT'),status:integer('status').notNull().default(200),
@@ -33,4 +33,4 @@ export const replayAttempts=pgTable('webhook_replay_attempts',{
  id:uuid('id').primaryKey().defaultRandom(),jobId:uuid('job_id').notNull().references(()=>replayJobs.id,{onDelete:'cascade'}),number:integer('number').notNull(),requestId:uuid('request_id').notNull().unique(),
  status:text('status').notNull().default('RUNNING'),errorCode:text('error_code'),responseStatus:integer('response_status'),responseBody:text('response_body'),responseHeaders:jsonb('response_headers'),durationMs:integer('duration_ms'),
  startedAt:timestamp('started_at',{withTimezone:true}).notNull().defaultNow(),finishedAt:timestamp('finished_at',{withTimezone:true}),
-},t=>[uniqueIndex('replay_attempts_job_number_idx').on(t.jobId,t.number)]);
+},t=>[uniqueIndex('replay_attempts_job_number_idx').on(t.jobId,t.number),index('replay_attempts_started_time_idx').on(t.startedAt)]);

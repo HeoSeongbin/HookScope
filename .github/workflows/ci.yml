@@ -35,3 +35,4 @@ jobs:
       - run: npm run smoke:filters -w backend
       - run: npm run smoke:response -w backend
       - run: npm run smoke:replay -w backend
+      - run: npm run smoke:analytics -w backend

@@ -1,5 +1,14 @@
 # Architecture Decision Records
 
+## ADR-019 · 읽기 전용 동일 스냅샷 Analytics (채택, Phase 6)
+수신 경로에 집계 쓰기나 Redis 캐시를 추가하지 않고 PostgreSQL의 실제 수신/시도 행을 집계한다. Endpoint별 또는 단일 관리자의 전체 권한 범위를 SQL에 바인딩하고 REPEATABLE READ READ ONLY에서 합계·분포·최근 목록을 함께 읽는다. 기간은 최대 31일, 시작 포함/종료 미포함, UTC hour 기준으로 고정하고 빈 버킷만 0으로 채운다. metadata만 반환하며 쿼리별 5초 timeout과 시각 인덱스를 적용한다. 전체 보관 건수 쿼리와 장기 검색의 대규모 부하 성능은 미검증이다.
+
+## ADR-020 · 예정 응답·캡처 준비·관측 HTTP 시간 분리 (채택, Phase 6)
+기존 responseStatus/durationMs는 예정 응답과 저장 전 준비 시간을 뜻하므로 업무 실패율이나 실제 응답시간으로 재해석하지 않는다. 예정 4xx/5xx와 파싱 오류를 분리 집계하고 겹칠 수 있음을 명시한다. 캡처 준비 평균/P95와 Replay Worker의 관측 시간 평균/P95를 구분한다. Replay는 startedAt 기준이며 측정값이 있는 시도 수를 제공하고 비어 있으면 null을 유지한다. 새 wire latency 측정이나 과거 수치 backfill은 추가하지 않는다.
+
+## ADR-021 · 의존성 없는 통계 시각화와 검증 (채택, Phase 6)
+SVG 시간 차트와 HTML 비율 막대·수치 표로 745개 이하 버킷을 표시한다. 표를 함께 제공해 차트의 수치를 확인할 수 있게 한다. 기존 수신 Socket Room을 전체 통계 알림에 재사용하지 않고 활성 화면에서 15초 REST 조회/수동 갱신을 수행한다. 로컬 빌드만으로 드러나지 않은 Docker frontend의 서버 타입 경로 의존을 제거하고 독립 REST DTO를 둔다. 실제 PostgreSQL smoke는 실제 HTTP 수신 후 경계 시각/상태/시도 fixture를 DB에 명시적으로 설정하며 사용자 화면용 가짜 데이터를 생성하지 않는다.
+
 ## ADR-016 · PostgreSQL 작업 이력과 Redis 전달 분리 (채택, Phase 5)
 작업/시도/원본 연결과 멱등성은 PostgreSQL이 관리하고 BullMQ에는 replayId만 저장한다. PENDING을 먼저 커밋하고 enqueue 실패는 대기 상태로 남긴다. 조정자가 5초마다 같은 큐 namespace의 미완료 작업을 복구한다. 세션 advisory lock, 작업 행 잠금, 시도 번호·예약 Request ID·replayAttemptId 고유 제약을 함께 사용한다. 큐 ID만으로 exactly-once를 주장하지 않는다.
 실제 smoke에서 서로 다른 큐의 조정자가 작업을 가져가 백오프가 짧아지는 문제를 발견했다. 적용한 0003을 수정하지 않고 0004로 queueName과 nextAttemptAt을 영속화했다. Worker 시작도 DB의 재시도 시각을 검사하므로 큐 유실/재등록이 재시도 제한을 우회하지 못한다.

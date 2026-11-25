@@ -1,4 +1,4 @@
-# Phase 1–5 검증
+# Phase 1–6 검증
 
 ## 자동화
 1. Vitest/Supertest: 관리 인증, 생성 토큰, JSON 원본 바이트, 중복 Query, 비밀 헤더 마스킹, malformed JSON, GET/PUT/PATCH/DELETE, 256KiB 초과, DB 실패, 토큰/메서드 거부, 입력 검증, live/ready, Text/Form/Binary 파싱, 중복 헤더 및 프로토타입 키.
@@ -39,4 +39,10 @@ Docker Desktop 실행 후 README의 Compose 명령으로 전체 서비스를 올
 4. Compose E2E: 원본 선택→Replay 성공→REPLAY 수신 상세→500 응답 설정 후 최대 2회 실패→원본 비교·시도 응답·상태 필터→기본 응답 복원. 데스크톱/390px 모바일 화면·넘침 확인. 기존 6개와 총 7개 통과.
 5. 기존 요청 220건을 보존한 추가 migration 0003/0004, 타입/Lint/Production Build 및 네 smoke 회귀 확인. 테스트 더블 119개와 실제 DB/Redis smoke 결과를 구분한다.
 
-외부 전송·계정별 소유권·TTL·부하·멀티 인스턴스·모든 강제 종료 시점 검증은 후속 대상이며 통과 처리하지 않는다.
+## Phase 6 추가 검증
+1. 단위/Supertest Repository 더블: 24시간 기본·offset·최대 31일·잘못된 날짜/offset/중복/알 수 없는 query 거부. 관리 인증·공개 키 거부·Endpoint 존재/UUID 검사·전역/Endpoint 범위 전달·DB 실패 503 확인. 기존 119개와 총 137개 통과.
+2. 실제 PostgreSQL Analytics smoke: 실제 HTTP 수신 6건 뒤 명시적인 경계 시각/예정 상태/출처/준비 시간 fixture를 설정한다. 시작 포함/종료 제외·부분 시간·동일한 offset 기간·745버킷 상한·0 채움·null 평균·Method/Status/출처 합계·최근 오류·상위 Endpoint 격리·P95를 검증한다. 별도 시도 fixture로 Replay 시작 시각과 관측 시간, null 측정값을 구분하고 응답에서 원문/토큰이 없음을 확인한다. 자체 DB 데이터 정리.
+3. Compose Playwright: 실제 200/500/204 수신과 malformed JSON 바이트 전송→기간 건수/오류/차트→최근 오류 상세→빈 과거 기간과 전체 보관 건수 구분→최근 기간 복귀→다른 Endpoint 수신 격리→전체 Dashboard. 데스크톱/390px 모바일 스크린샷·가로 넘침 확인. 기존 7개 회귀도 유지.
+4. Compose frontend/backend/worker build 및 0005 index migration, ledger 재실행 전후 요청 467/작업 10/시도 14 유지 확인. 실제 DB smoke 총 5종, TypeScript/Lint/Production Build 검증.
+
+외부 전송·계정별 소유권·TTL·대규모 Analytics 부하·멀티 인스턴스·모든 강제 종료 시점 검증은 후속 대상이며 통과 처리하지 않는다.

@@ -1,13 +1,50 @@
 openapi: 3.1.0
 info:
-  title: HookScope Phase 5 API
-  version: 0.5.0
-  description: Authenticated management, filters, response configuration, Test Sender and internal-only durable Replay. Errors use an error object with a code string. Full policies are documented in PROJECT.md.
+  title: HookScope Phase 6 API
+  version: 0.6.0
+  description: Authenticated management, captures, Test Sender, durable Internal Replay and snapshot-based Analytics. Errors use an error object with a code string. Full policies are documented in PROJECT.md.
 servers:
   - url: http://localhost:8088
 security:
   - AdminKey: []
 paths:
+  /api/v1/dashboard/summary:
+    get:
+      summary: Aggregate all endpoints accessible to the authenticated local administrator
+      description: Read-only PostgreSQL snapshot. Includes EXTERNAL/TEST/REPLAY. No body, headers, query or public token returned. Unknown/duplicate query keys are rejected.
+      parameters:
+        - $ref: '#/components/parameters/AnalyticsFrom'
+        - $ref: '#/components/parameters/AnalyticsTo'
+      responses:
+        '200':
+          description: Metadata-only snapshot statistics; historical totals are distinct from window totals
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Analytics'}
+        '400': {description: Invalid period or query; at most 31 days}
+        '401': {description: Unauthorized}
+        '429': {description: Management rate limit exceeded}
+        '503': {description: Storage unavailable; never replaced by zero statistics}
+  /api/v1/endpoints/{id}/statistics:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      summary: Aggregate one authorized endpoint
+      description: Same contract as dashboard summary, with every count and replay attempt restricted to this endpoint. Unknown/duplicate query keys are rejected.
+      parameters:
+        - $ref: '#/components/parameters/AnalyticsFrom'
+        - $ref: '#/components/parameters/AnalyticsTo'
+      responses:
+        '200':
+          description: Endpoint statistics
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Analytics'}
+        '400': {description: Invalid UUID, period or query}
+        '401': {description: Unauthorized}
+        '404': {description: Endpoint not found}
+        '429': {description: Management rate limit exceeded}
+        '503': {description: Storage unavailable}
   /api/v1/requests/{id}/replay:
     parameters:
       - $ref: '#/components/parameters/Id'
@@ -258,6 +295,105 @@ paths:
         '503': {description: Database not ready}
 components:
   schemas:
+    Analytics:
+      type: object
+      description: Same-snapshot statistics; planned HTTP status is not business success or actual client receipt
+      properties:
+        endpointId: {type: [string, 'null'], format: uuid, description: Null for global dashboard}
+        asOf: {type: string, format: date-time, description: PostgreSQL transaction start timestamp}
+        range:
+          type: object
+          properties:
+            from: {type: string, format: date-time}
+            to: {type: string, format: date-time}
+            bucket: {type: string, const: hour}
+            timezone: {type: string, const: UTC}
+        endpointCount: {type: integer, description: 'All accessible endpoints in this scope, not filtered by period'}
+        allTimeRequests: {type: integer, description: 'All retained captures in this scope, not filtered by period'}
+        totals:
+          type: object
+          properties:
+            requests: {type: integer}
+            recentHourRequests: {type: integer, description: Intersection of selected window and the hour before to}
+            plannedErrorResponses: {type: integer, description: Planned status at least 400; may overlap parseErrors}
+            parseErrors: {type: integer}
+            bodyBytes: {type: integer}
+            capturePreparationAvgMs: {type: [number, 'null'], description: 'Before DB storage, not total HTTP latency'}
+            capturePreparationP95Ms: {type: [number, 'null'], description: Continuous 95th percentile; null without samples}
+        methods:
+          type: array
+          items:
+            type: object
+            properties:
+              method: {type: string}
+              count: {type: integer}
+        statuses:
+          type: array
+          items:
+            type: object
+            properties:
+              status: {type: integer, description: Planned response status}
+              count: {type: integer}
+        sources:
+          type: array
+          items:
+            type: object
+            properties:
+              source: {type: string, enum: [EXTERNAL, TEST, REPLAY]}
+              count: {type: integer}
+        timeline:
+          type: array
+          maxItems: 745
+          description: UTC hour starts, ascending; zero filled empty buckets with partial boundary hours clipped to the requested period
+          items:
+            type: object
+            properties:
+              hour: {type: string, format: date-time}
+              count: {type: integer}
+        endpointUsage:
+          type: array
+          maxItems: 10
+          description: Top ten by window count descending, then UUID; percentages use all window requests as denominator
+          items:
+            type: object
+            properties:
+              id: {type: string, format: uuid}
+              name: {type: string}
+              count: {type: integer}
+        recentRequests:
+          type: array
+          maxItems: 5
+          items: {$ref: '#/components/schemas/AnalyticsCapture'}
+        recentErrors:
+          type: array
+          maxItems: 5
+          description: Planned status at least 400 or parse error; ordered by receivedAt and UUID descending
+          items: {$ref: '#/components/schemas/AnalyticsCapture'}
+        replay:
+          type: object
+          description: Attempts with startedAt in the selected period; independent of capture receivedAt
+          properties:
+            attempts: {type: integer}
+            timedAttempts: {type: integer, description: Attempts with non-null durationMs}
+            avgDurationMs: {type: [number, 'null'], description: Actual Worker HTTP elapsed time for measured attempts}
+            p95DurationMs: {type: [number, 'null']}
+            statuses:
+              type: array
+              items:
+                type: object
+                properties:
+                  status: {type: string, enum: [RUNNING, SUCCEEDED, FAILED, UNKNOWN]}
+                  count: {type: integer}
+    AnalyticsCapture:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        endpointId: {type: string, format: uuid}
+        method: {type: string}
+        receivedAt: {type: string, format: date-time}
+        responseStatus: {type: integer}
+        source: {type: string, enum: [EXTERNAL, TEST, REPLAY]}
+        parseError: {type: boolean, description: Whether parsing failed; no raw parser message returned}
     ReplayStatus:
       type: string
       enum: [PENDING, QUEUED, RUNNING, RETRYING, SUCCEEDED, FAILED, CANCELLED, UNKNOWN]
@@ -353,6 +489,16 @@ components:
   securitySchemes:
     AdminKey: {type: http, scheme: bearer}
   parameters:
+    AnalyticsFrom:
+      name: from
+      in: query
+      description: Inclusive ISO timestamp with timezone; defaults to 24 hours before to. Positive range at most 31 days.
+      schema: {type: string, format: date-time}
+    AnalyticsTo:
+      name: to
+      in: query
+      description: Exclusive ISO timestamp with timezone; defaults to query time.
+      schema: {type: string, format: date-time}
     Id:
       name: id
       in: path

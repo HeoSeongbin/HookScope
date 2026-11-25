@@ -1,4 +1,11 @@
-# Phase 1–5 아키텍처
+# Phase 1–6 아키텍처
+
+## Phase 6 Analytics 경계
+analyticsPolicy.ts는 최대 31일의 from/to 검증과 서버 응답 계약, analyticsRepository.ts는 metadata만 반환하는 동일 스냅샷 PostgreSQL 집계를 담당한다. app.ts는 기존 관리 인증 후 전역 Dashboard 또는 검증한 Endpoint 하나를 전달하며 server.ts에서 실제 Repository를 주입한다. 수신·저장·Socket·Replay 실행 경로에 집계 쓰기를 추가하지 않는다.
+
+REPEATABLE READ READ ONLY에서 전체 보관 건수·기간 건수·Method/예정 Status/출처·UTC hour·최근 5건·Endpoint 상위 10개·캡처 준비 시간·Replay 실제 시간을 조회한다. 모든 조건은 파라미터로 바인딩하고 쿼리별 5초 timeout을 둔다. 빈 시간만 generate_series로 0을 채우며 측정 없는 평균/P95는 null이다. 전체 HTTP 응답 시간을 기존 준비 시간으로 대체하지 않는다. 0005는 전역 수신 시간과 Replay 시도 시작 시간 인덱스만 추가한다.
+
+AnalyticsPanel.tsx는 독립 조회 범위/기간과 15초 활성 탭 polling, 이전 조회 무시, SVG 차트·동일 수치 표·비율 막대·최근 상세 링크를 담당한다. 전체 Dashboard에서 다른 Endpoint의 요청을 열면 해당 Endpoint와 상세를 선택한다. analyticsTypes.ts는 frontend 이미지가 서버 소스에 의존하지 않는 REST DTO다. 새 차트 라이브러리·Redis 캐시·새 Socket Room은 추가하지 않는다.
 
 ## Phase 5 재전송 경계
 replayPolicy.ts는 입력·안전한 Header·고정 내부 origin·HMAC·결과 분류, replayTransport.ts는 실제 HTTP 및 5초/16KiB 제한을 담당한다. replayService.ts는 관리 API 조합과 durable outbox 조정, replayRepository.ts는 PostgreSQL 작업/시도/중복 수신 트랜잭션을 담당한다. replayQueue.ts는 BullMQ 연결과 제한된 enqueue 대기, replayWorker.ts는 실행/재시도 상태, worker.ts/workerHealth.ts는 별도 프로세스와 DB 확인 후 heartbeat를 담당한다.

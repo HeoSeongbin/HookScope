@@ -3,7 +3,7 @@
 Webhook Testing & Monitoring Platform. 실제 HTTP 요청을 수신하고 PostgreSQL에 영속 저장하여 개발자가 내용을 분석하는 포트폴리오 프로젝트다.
 
 ## 이번 범위
-Phase 0–4의 기능을 유지하고 Phase 5 Internal Replay, Redis/BullMQ Worker 및 PostgreSQL 작업·시도 이력을 구현한다. 외부 URL 전송과 통계는 포함하지 않는다.
+Phase 0–5의 기능을 유지하고 Phase 6 Analytics 및 모니터링을 구현한다. 실제 DB 기반 Dashboard, 요청량/Method/예정 응답 Status/시간별/Endpoint별 집계와 처리시간 분석을 제공한다. 외부 URL 전송·계정 소유권·보관 정책은 이번 범위가 아니다.
 
 ## 기술 스택
 Node.js 24 LTS, TypeScript strict, Express 5, Drizzle ORM 및 node-postgres, PostgreSQL 17, Zod, Pino, React 19, Vite 8, Vitest 5, Supertest, Redis 7 및 BullMQ 5. 실제 설치 버전은 package-lock.json이 기준이다. Redis는 Replay 작업 전달에 사용하며 일반 수신 경로에서는 사용하지 않는다.
@@ -36,13 +36,23 @@ GET /health/live, /health/ready. 오류는 {error:{code}} 규약.
 보관 자동 정리·전체 저장량 한도는 Phase 7로 예정. Phase 1 데이터는 수동 삭제 전까지 유지되므로 로컬 개발에서만 사용한다. 공개 서비스 준비 완료로 간주하지 않는다.
 
 ## 향후 Phase 및 최종 조건
-2: Socket.IO 인증 Room·재연결 REST 동기화. 3: 검색·필터·JSON Tree. 4: 응답 설정·자체 Test Sender. 5: BullMQ Internal Replay·시도 기록·백오프(이번 구현). 6: 실제 DB 기반 통계. 7: 사용자별 권한·만료·보관·감사. 8: 테마·접근성·성능. 9: E2E·공개 포트폴리오 문서 및 시연.
+2: Socket.IO 인증 Room·재연결 REST 동기화. 3: 검색·필터·JSON Tree. 4: 응답 설정·자체 Test Sender. 5: BullMQ Internal Replay·시도 기록·백오프. 6: 실제 DB 기반 통계(이번 구현). 7: 사용자별 권한·만료·보관·감사. 8: 테마·접근성·성능. 9: E2E·공개 포트폴리오 문서 및 시연.
 Replay는 PostgreSQL 작업/시도 이력과 멱등성 제약을 함께 설계하며 Job ID만 신뢰하지 않는다. 외부 전송은 허용 목록, DNS/IP 검증, redirect 금지, timeout 및 응답 크기 제한 후 별도 제공한다.
 Socket.IO는 DB 저장 이후 식별자 이벤트만 발행하고 REST 재조회가 정합성의 기준이 된다. 멀티 인스턴스에서는 Redis adapter와 공유 rate limiter가 필요하다.
-최종 완료는 사용자 원문 28절의 전체 기능 및 테스트 조건을 충족한 시점이며, 현재는 Phase 0–5의 구현 및 명시한 검증 범위만 완료로 평가한다.
+최종 완료는 사용자 원문 28절의 전체 기능 및 테스트 조건을 충족한 시점이며, 현재는 Phase 0–6의 구현 및 명시한 검증 범위만 완료로 평가한다.
 
 ## 테스트 전략
 파서/브라우저 이벤트 중복 방지 단위 테스트, Supertest 및 실제 Socket 클라이언트 통합 테스트, 실제 PostgreSQL HTTP→DB→Socket→REST 스모크 테스트, Compose 기반 브라우저 E2E를 구분한다. 타입 검사, ESLint, Production Build를 실행한다. 결과 및 차단 사항은 docs/PROGRESS.md 참조.
+
+## Phase 6 Analytics 계약
+- GET /api/v1/dashboard/summary는 현재 관리자가 접근 가능한 전체 Endpoint, GET /api/v1/endpoints/:id/statistics는 검증한 Endpoint 하나만 집계한다. 모두 기존 ADMIN_KEY 인증과 관리 rate limit을 적용한다. 공개 토큰은 관리 인증에 사용하지 않는다. 현재 단일 관리자가 전체 Endpoint 권한을 갖는다.
+- query는 from/to만 허용하며 명시적 UTC/offset ISO 시각, from < to, 최대 31일이다. to 기본값은 조회 시각, from은 to 이전 24시간이다. 시작 포함·종료 미포함이며 임의/중복 key와 잘못된 범위를 400으로 거부한다. 요청 목록의 검색/페이지와 독립적이다.
+- PostgreSQL REPEATABLE READ READ ONLY 트랜잭션에서 전체/기간 건수·Method·예정 Status·출처·UTC 시간량·Endpoint 상위 10개·최근 수신/오류 각각 5개·처리시간을 같은 스냅샷으로 읽는다. SQL 파라미터 바인딩과 쿼리별 5초 statement_timeout을 적용한다. 조회 실패는 503이며 가짜 0건으로 대체하지 않는다.
+- endpointCount/allTimeRequests는 보관된 전체 범위, totals 및 분포는 조회 기간의 실제 수신 행이다. EXTERNAL/TEST/REPLAY 모두 포함하며 recentHourRequests는 조회 기간과 to 이전 1시간의 교집합이다. plannedErrorResponses는 예정 상태 >=400, parseErrors는 파싱 오류로 서로 겹칠 수 있다. 업무 성공률·실제 클라이언트 응답 성공률로 표현하지 않는다.
+- UTC 시간별 버킷은 최대 745개(31일의 부분 시작/종료 시간 포함)이고 실제 비어 있는 구간만 0으로 채운다. Endpoint 상위 10개 비율도 전체 기간 요청 수를 분모로 사용한다. 최근 오류는 예정 4xx/5xx 또는 파싱 오류이며 HTTP 원문/본문/헤더/쿼리/공개 토큰은 응답에서 제외한다.
+- durationMs의 평균/P95는 DB 저장 전 캡처 준비 시간이다. 전체 HTTP 응답 시간으로 이름을 바꾸지 않는다. Replay 실제 HTTP 시간은 시도 startedAt 기간으로 별도 집계하고 durationMs가 있는 시도 수를 함께 제공한다. 측정값이 없으면 평균/P95는 null이다. 불확실 시도도 상태별 건수로 남으며 시간 없는 값을 0으로 꾸미지 않는다.
+- analyticsPolicy.ts/analyticsRepository.ts 및 AnalyticsPanel을 분리한다. UI는 선택 Endpoint/전체 Dashboard, 최근 24시간/7일/사용자 기간, SVG 차트와 수치 표, 최근 상세 링크, 활성 탭 15초 조회를 제공한다. 이전 Endpoint/기간 응답은 세대 번호로 무시한다. 캡처·Worker 상태나 알림 발행 로직은 변경하지 않는다.
+- migration 0005는 수신 시각/Replay 시작 시각 인덱스만 추가한다. 과거 duration/예정 응답을 새 측정값으로 재작성하지 않는다. 캐시·사전 집계 테이블·새 차트 의존성은 추가하지 않는다. 대규모 부하/전체 wire latency/사용자별 소유권은 이번에 검증하지 않는다.
 
 ## Phase 5 Internal Replay 계약
 - 관리 인증 후 원본 요청과 활성 Endpoint를 확인한다. POST /api/v1/requests/:id/replay는 UUID idempotencyKey와 maxAttempts(1–3, 기본 3)를 받는다. 같은 키·원본·시도 한도는 같은 작업을 반환하고 다른 입력 재사용은 409다. 관리 IP별 20회/분 제한이며 사용자 목적지 URL은 받지 않는다.

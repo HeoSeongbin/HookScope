@@ -2,9 +2,9 @@
 
 Webhook Testing & Monitoring Platform. 실제 HTTP 요청을 받아 PostgreSQL에 저장하고 헤더·쿼리·본문을 분석하는 한국어 개발 콘솔입니다.
 
-현재 구현: **Phase 0–5**. 실시간 모니터·검색·분석, 사용자 정의 응답, Test Sender 및 Redis/BullMQ 기반 Internal Replay를 지원합니다. 통계 차트는 다음 단계입니다. 공개 데모 주소는 없습니다.
+현재 구현: **Phase 0–6**. 실시간 모니터·검색·분석, 사용자 정의 응답, Test Sender, Redis/BullMQ Internal Replay 및 실제 PostgreSQL 기반 Analytics를 지원합니다. 공개 데모 주소는 없습니다.
 
-![Phase 5 Internal Replay](docs/screenshots/phase5-desktop.png)
+![Phase 6 Analytics](docs/screenshots/phase6-desktop.png)
 
 ## 주요 기능
 - 암호학적 난수로 고유 수신 URL 생성, 관리 키와 공개 토큰 분리
@@ -18,6 +18,7 @@ Webhook Testing & Monitoring Platform. 실제 HTTP 요청을 받아 PostgreSQL�
 - 헤더 검색·복사, 중복 Query 행, JSON 트리·민감 필드 표시 마스킹, Text/Form 분석 및 원본 바이트 다운로드
 - Endpoint별 응답 Status/Content-Type/Body/Header/지연 설정, 실제 HTTP Test Sender 및 TEST 이력·응답 스냅샷
 - 자체 Endpoint Internal Replay, 멱등 작업 생성·대기 취소·상태 필터, PostgreSQL 시도 이력과 원본 비교
+- 전체/Endpoint별 Analytics, 시간별 차트·Method 비율·예정 응답 Status 분포·최근 오류·처리시간 분석
 - 본문 크기 제한, 기본 Rate Limit, 준비 상태 확인, Docker Compose
 
 ## 스택 및 구조
@@ -50,7 +51,7 @@ docker compose ps
 
 [관리 화면](http://localhost:8088)을 열고 .env의 ADMIN_KEY를 입력하세요. 이번 작업 환경에는 임의의 키가 담긴 .env가 이미 생성되어 있습니다. 해당 파일은 Git 및 Docker 빌드에서 제외됩니다. API는 localhost:3000, DB는 localhost:5432입니다. 호스트 포트는 루프백에만 바인딩됩니다. 8080 포트가 기존 서비스에 사용되고 있어 프론트 기본값을 8088로 정했습니다. 변경 시 FRONTEND_PORT와 FRONTEND_ORIGIN을 함께 수정하세요.
 
-DB 준비 후 API 시작 시 SQL 마이그레이션을 트랜잭션과 advisory lock 안에서 실행하고 schema_migrations에 기록합니다. 기존 DB도 0002–0004의 테이블·컬럼을 자동 추가하며 데이터를 삭제하지 않습니다. frontend/backend/worker/postgres/redis 다섯 서비스의 healthcheck로 준비 상태를 확인합니다. Worker는 DB 확인 후 Redis heartbeat를 갱신합니다. Named Volume에 DB가 유지됩니다. Redis는 소스 개발용으로 localhost:6379에만 바인딩합니다.
+DB 준비 후 API 시작 시 SQL 마이그레이션을 트랜잭션과 advisory lock 안에서 실행하고 schema_migrations에 기록합니다. 기존 DB도 0002–0005의 테이블·컬럼·인덱스를 자동 추가하며 데이터를 삭제하지 않습니다. frontend/backend/worker/postgres/redis 다섯 서비스의 healthcheck로 준비 상태를 확인합니다. Worker는 DB 확인 후 Redis heartbeat를 갱신합니다. Named Volume에 DB가 유지됩니다. Redis는 소스 개발용으로 localhost:6379에만 바인딩합니다.
 
 ```powershell
 docker compose logs backend
@@ -116,6 +117,17 @@ Worker는 원본의 같은 Endpoint로 Raw Body 바이트와 중복 Query를 전
 
 Redis enqueue 실패에도 PostgreSQL의 PENDING을 유지하고 5초 주기 조정자가 복구합니다. 재등록 후에도 DB의 재시도 시각을 지킵니다. 작업 ID만 Redis에 저장하며 모든 장애 상황에서 exactly-once 전달을 보장하지 않습니다.
 
+## Analytics 및 모니터링
+**Analytics → 분석 범위**에서 선택한 Endpoint 또는 전체 Dashboard를 고릅니다. 최근 24시간/7일 또는 현지 시각으로 최대 31일을 조회할 수 있습니다. 요청 검색 조건과는 독립적이며 활성 탭에서 15초마다 조회합니다. **통계 갱신**으로 직접 갱신할 수도 있습니다.
+
+- 보관된 전체 요청과 기간 내 수신·최근 1시간 건수를 구분합니다. EXTERNAL/TEST/REPLAY 모두 포함합니다.
+- UTC 시간별 차트와 펼칠 수 있는 수치 표, Method 비율, 예정 응답 Status·출처 분포, Endpoint 상위 10개 수신량을 제공합니다. 시작 시각 포함·종료 시각 미포함이며 빈 시간은 0건입니다.
+- 최근 수신/오류 각각 5건에서 실제 요청 상세로 이동합니다. 예정 4xx·5xx와 파싱 오류는 별도 집계하며 한 요청이 양쪽에 포함될 수 있습니다.
+- 캡처 준비 평균/P95는 DB 저장 전 시간이며 전체 응답 시간이 아닙니다. Replay의 실제 HTTP 평균/P95와 측정된 시도 수는 별도로 표시합니다. 측정값이 없으면 **측정 없음**입니다. 예정 오류 응답은 대상 업무 실패율을 뜻하지 않습니다.
+- 집계는 PostgreSQL의 같은 읽기 스냅샷을 사용합니다. 수신 본문·Header·Query·공개 토큰을 통계 응답에 포함하지 않습니다. 조회 실패는 오류로 표시하며 가짜 0건으로 대체하지 않습니다.
+
+API: `GET /api/v1/dashboard/summary`, `GET /api/v1/endpoints/:id/statistics`. 선택 query는 시간대가 포함된 ISO `from`/`to`이며 기본값은 최근 24시간입니다. Endpoint 수와 보관 전체 건수 외의 값은 선택 기간 기준입니다. Replay 시간은 시도 시작 시각 기준입니다. 상세 계약은 [PROJECT.md](PROJECT.md)와 [OpenAPI](docs/openapi.yaml)를 참고하세요.
+
 ## 로컬 소스 개발
 ```powershell
 npm ci
@@ -149,12 +161,13 @@ docker compose exec -T backend npm run smoke
 docker compose exec -T backend npm run smoke:filters
 docker compose exec -T backend npm run smoke:response
 docker compose exec -T backend npm run smoke:replay
+docker compose exec -T backend npm run smoke:analytics
 npx playwright install chromium
 npx playwright test --config frontend/playwright.config.ts
 ```
 
-Vitest/Supertest 및 실제 Socket/HTTP 클라이언트 테스트 **119개**가 통과했습니다. Repository 더블 검증과 실제 PostgreSQL 검증을 구분합니다. 실제 Compose smoke 4종은 기존 수신·필터·응답 설정과 Redis/BullMQ 재전송의 원본 바이트·멱등성·백오프·취소·출처 위조 거부·중복 수신·중단 UNKNOWN·대기 작업 복구를 확인합니다. 각 smoke는 자신의 데이터를 정리합니다.
-Compose 기반 Playwright **7개**는 기존 6개 회귀와 Replay 성공·실패 재시도·REPLAY 표시·원본 비교·상태 필터 및 모바일 가로 넘침을 확인했습니다. 실제 Endpoint와 테스트 요청을 남기며 화면 수치는 DB 데이터만 사용합니다. Phase 5 migration 도입 시 기존 DB 요청 **220건**을 보존했습니다. Redis 실제 중단 중에도 HTTP 수신/DB readiness를 유지하고 재시작 후 대기 Replay 성공을 확인했습니다. CI에 Redis와 네 번째 smoke를 추가했으며 원격 CI 실행은 미검증입니다.
+Vitest/Supertest 및 실제 Socket/HTTP 클라이언트 테스트 **137개**가 통과했습니다. Repository 더블 검증과 실제 PostgreSQL 검증을 구분합니다. 실제 Compose smoke 5종은 기존 수신·필터·응답 설정·Replay와 신규 Analytics를 확인합니다. Analytics는 실제 HTTP 수신 후 DB에 명시적 시각/상태/시도 fixture를 설정하여 UTC·offset·부분 시간·종료 경계, Endpoint 격리, P95, 빈 값, 원문 미노출을 확인합니다. 각 smoke는 자신의 데이터를 정리합니다.
+Compose 기반 Playwright **8개**는 기존 7개 회귀와 Analytics의 실제 수신 집계·오류 상세 연결·빈 기간·Endpoint 격리·전체 범위 및 데스크톱/모바일 넘침을 확인합니다. E2E는 실제 Endpoint와 테스트 요청을 남기며 화면 수치는 DB 데이터만 사용합니다. Phase 6 migration 재실행 후 요청 **467건**, Replay 작업 **10건**, 시도 **14건**이 유지됐습니다. CI에 Analytics smoke를 추가했으며 원격 CI 실행은 미검증입니다. 과거 Phase의 검증은 [진행 기록](docs/PROGRESS.md)에 유지합니다.
 
 ## 보안·보관 정책 및 제약
 - 로컬 단일 관리자 MVP입니다. ADMIN_KEY를 공유하면 같은 관리 권한을 갖습니다. 다중 사용자·소유권·로그인 세션은 미구현입니다.
@@ -164,9 +177,10 @@ Compose 기반 Playwright **7개**는 기존 6개 회귀와 Replay 성공·실�
 - Authorization, Cookie, token/secret/API-key 계열 헤더는 저장 전에 마스킹합니다. Body·Query는 원문이 저장되므로 실제 자격 증명을 보내지 마세요. 요청 IP는 저장하지 않습니다.
 - 자동 만료·삭제 UI·전체 저장 용량 제한은 후속 Phase입니다. 현재 데이터는 수동 DB 정리 전까지 보관됩니다. 데이터가 필요하면 Volume을 유지하세요.
 - 전체 응답 소요시간은 아직 측정하지 않습니다. durationMs는 저장 전 캡처 준비 시간이며 responseStatus는 예정 응답입니다. 실제 전송 완료는 구조화 로그의 RESPONSE_SENT입니다.
-- Light Mode·통계·외부 URL 전송은 제공하지 않습니다. 모든 프로세스 강제 종료·부하·멀티 인스턴스 장애 조합은 미검증입니다.
+- Light Mode·외부 URL 전송은 제공하지 않습니다. 모든 프로세스 강제 종료·부하·멀티 인스턴스 장애 조합은 미검증입니다.
+- Analytics는 읽기 시점 집계이며 전체 보관 건수도 DB에서 계산합니다. 대규모 장기 집계 부하는 미검증이며 캐시·사전 집계·전체 wire 응답시간 수집은 제공하지 않습니다.
 - 키워드 검색은 Endpoint 범위의 텍스트 스캔입니다. 대량 검색·부하 성능은 미검증이며 JSON 트리는 분기당 100개씩, 최대 32단계까지만 펼칩니다. 마스킹은 키 이름 휴리스틱이며 비밀정보의 완전한 탐지를 보장하지 않습니다.
 - 배포된 서비스가 없습니다. 공개 운영에는 HTTPS, 계정별 권한, 수신/보관 한도, 정리 작업, 공유 Rate Limit을 추가해야 합니다.
-- 2026-11-24 실행한 `npm audit` 및 `npm audit --omit=dev`는 모두 0건입니다. 이번 Phase는 BullMQ를 추가했습니다. 로컬 backend 이미지는 테스트 실행을 위해 개발 의존성도 포함합니다.
+- 2026-11-24 실행한 `npm audit` 및 `npm audit --omit=dev`는 모두 0건이었습니다. Phase 6은 새 의존성을 추가하지 않았으며 Compose의 npm ci도 0건을 보고했습니다. 로컬 backend 이미지는 테스트 실행을 위해 개발 의존성도 포함합니다.
 
-스크린샷: [데스크톱](docs/screenshots/phase5-desktop.png) · [모바일](docs/screenshots/phase5-mobile.png). 다음 단계는 **Phase 6 실제 DB 기반 통계**입니다.
+스크린샷: [데스크톱](docs/screenshots/phase6-desktop.png) · [모바일](docs/screenshots/phase6-mobile.png). 다음 단계는 **Phase 7 보안 및 운영 기능**입니다.

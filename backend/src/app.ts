@@ -16,8 +16,9 @@ import {testInputSchema,TestLimitError,type TestTransport} from './testSender.js
 import {setTimeout as delay} from 'node:timers/promises';
 import type {ReplayService} from './replayService.js';
 import {ReplayError} from './replayPolicy.js';
+import {analyticsRange,type AnalyticsRepository} from './analyticsPolicy.js';
 const log=pino();
-export function createApp(repo:Repository,key:string,origin='http://localhost:5173',publish:PublishReceived=()=>{},tests?:TestTransport,replays?:ReplayService) {
+export function createApp(repo:Repository,key:string,origin='http://localhost:5173',publish:PublishReceived=()=>{},tests?:TestTransport,replays?:ReplayService,analytics?:AnalyticsRepository) {
  if(key.length<32) throw new Error('ADMIN_KEY must contain at least 32 characters');
  const app=express(); app.disable('x-powered-by');app.set('query parser','simple');
  app.use(helmet());app.use(cors({origin,methods:['GET','POST','PUT'],allowedHeaders:['Authorization','Content-Type']}));
@@ -72,6 +73,8 @@ export function createApp(repo:Repository,key:string,origin='http://localhost:51
  });
  api.use(rateLimit({windowMs:60_000,limit:300,legacyHeaders:false}));api.use(express.json({limit:'16kb'}));
  api.get('/endpoints',async(_req,res)=>res.json({items:await repo.listEndpoints()}));
+ api.get('/dashboard/summary',async(req,res)=>{const range=analyticsRange(req.query);if(!analytics){res.status(503).json({error:{code:'ANALYTICS_UNAVAILABLE'}});return;}res.json(await analytics.read(range));});
+ api.get('/endpoints/:id/statistics',async(req,res)=>{const id=z.uuid().parse(req.params.id);const range=analyticsRange(req.query);if(!await repo.endpoint(id)){res.status(404).json({error:{code:'NOT_FOUND'}});return;}if(!analytics){res.status(503).json({error:{code:'ANALYTICS_UNAVAILABLE'}});return;}res.json(await analytics.read(range,id));});
  api.post('/endpoints',async(req,res)=>{const {name}=z.object({name:z.string().trim().min(1).max(80)}).parse(req.body);res.status(201).json(await repo.createEndpoint(name,randomBytes(24).toString('hex')));});
  api.get('/endpoints/:id',async(req,res)=>{const item=await repo.endpoint(z.uuid().parse(req.params.id));if(!item){res.status(404).json({error:{code:'NOT_FOUND'}});return;}res.json(item);});
  api.get('/endpoints/:id/requests',async(req,res)=>{const id=z.uuid().parse(req.params.id);const filters=requestFiltersSchema.parse(req.query);if(!await repo.endpoint(id)){res.status(404).json({error:{code:'NOT_FOUND'}});return;}res.json(await repo.list(id,filters));});

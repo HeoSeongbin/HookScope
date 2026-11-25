@@ -1,0 +1,26 @@
+import {test,expect} from '@playwright/test';
+import {readFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+const key=readFileSync(new URL('../../.env',import.meta.url),'utf8').match(/^ADMIN_KEY=(.+)$/m)![1].trim();
+test('analytics visualizes real captures, endpoint isolation, empty ranges and global summary',async({page,request})=>{
+ await page.goto('/');await page.getByLabel('개발용 관리 키').fill(key);await page.getByRole('button',{name:'관리 콘솔 열기'}).click();
+ const name='Phase 6 분석 '+Date.now();await page.getByLabel('엔드포인트 이름').fill(name);await page.getByTitle('엔드포인트 생성').click();await expect(page.getByRole('button',{name,exact:true})).toBeVisible();
+ const panel=page.getByRole('region',{name:'Analytics 대시보드'});await expect(panel.getByTestId('analytics-count')).toHaveText('0');
+ const url=await page.locator('.url-card code').innerText();const first=await request.post(url,{headers:{'Content-Type':'application/json'},data:{event:'phase6.analytics'}});expect(first.status()).toBe(200);const firstId=(await first.json()).requestId;
+ const original=await request.get(`/api/v1/requests/${firstId}`,{headers:{Authorization:`Bearer ${key}`}}).then(r=>r.json());
+ const setResponse=async(status:number)=>expect((await request.put(`/api/v1/endpoints/${original.endpointId}/response`,{headers:{Authorization:`Bearer ${key}`},data:{mode:'CUSTOM',status,contentType:'text/plain',body:status===204?'':'analytics error',headers:[],delayMs:0}})).status()).toBe(200);
+ await setResponse(500);expect((await request.put(url,{headers:{'Content-Type':'application/json'},data:Buffer.from('{broken')})).status()).toBe(500);await setResponse(204);expect((await request.get(url)).status()).toBe(204);
+ expect((await request.put(`/api/v1/endpoints/${original.endpointId}/response`,{headers:{Authorization:`Bearer ${key}`},data:{mode:'DEFAULT'}})).status()).toBe(200);
+ await panel.getByRole('button',{name:'통계 갱신',exact:true}).click();await expect(panel.getByTestId('analytics-count')).toHaveText('3');await expect(panel.getByTestId('analytics-errors')).toHaveText('1 / 1');
+ await expect(panel.getByRole('img',{name:/시간별 요청량: 3건/})).toBeVisible();await expect(panel).toContainText('전체 응답 시간이 아닙니다');
+ const errors=panel.locator('article').filter({has:page.getByRole('heading',{name:'최근 오류 · 예정 4xx·5xx 또는 파싱 오류',exact:true})});await expect(errors.locator('button')).toHaveCount(1);await errors.locator('button').click();await expect(page.locator('.inspector')).toContainText('JSON 파싱 실패');
+ await panel.getByLabel('통계 시작 시각').fill('2000-01-01T00:00');await panel.getByLabel('통계 종료 시각').fill('2000-01-01T02:00');await panel.getByRole('button',{name:'통계 기간 적용'}).click();await expect(panel.getByTestId('analytics-count')).toHaveText('0');await expect(panel.getByTestId('analytics-all-time')).toHaveText('3');await expect(panel).toContainText('빈 시간은 0건');
+ await panel.getByLabel('통계 기간').selectOption('24');await expect(panel.getByTestId('analytics-count')).toHaveText('3');
+ const foreign=await request.post('/api/v1/endpoints',{headers:{Authorization:`Bearer ${key}`},data:{name:'Phase 6 격리 '+Date.now()}}).then(r=>r.json());const foreignResponse=await request.post('/h/'+foreign.publicToken,{data:'foreign'});expect(foreignResponse.status()).toBe(200);const foreignId=(await foreignResponse.json()).requestId as string;
+ await panel.getByRole('button',{name:'통계 갱신',exact:true}).click();await expect(panel.getByTestId('analytics-count')).toHaveText('3');
+ await panel.getByLabel('통계 범위').selectOption('all');await expect(panel).toContainText('전체 Dashboard');await expect.poll(async()=>Number((await panel.getByTestId('analytics-count').innerText()).replaceAll(',',''))).toBeGreaterThanOrEqual(4);
+ const summary=await request.get('/api/v1/dashboard/summary',{headers:{Authorization:`Bearer ${key}`}}).then(r=>r.json());expect(summary.totals.requests).toBeGreaterThanOrEqual(4);expect(summary.timeline.reduce((sum:number,row:{count:number})=>sum+row.count,0)).toBe(summary.totals.requests);
+ await panel.locator('.analytics-recent').filter({hasText:foreignId.slice(0,8)}).first().click();await expect(panel.getByTestId('analytics-count')).toHaveText('1');await expect(page.locator('.inspector .panel-title')).toContainText(foreignId.slice(0,8));
+ await page.getByRole('button',{name,exact:true}).click();await expect(panel.getByTestId('analytics-count')).toHaveText('3');
+ await page.screenshot({path:fileURLToPath(new URL('../../docs/screenshots/phase6-desktop.png',import.meta.url)),fullPage:true});await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:fileURLToPath(new URL('../../docs/screenshots/phase6-mobile.png',import.meta.url)),fullPage:true});
+});
