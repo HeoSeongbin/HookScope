@@ -1,16 +1,139 @@
 openapi: 3.1.0
 info:
-  title: HookScope Phase 6 API
-  version: 0.6.0
-  description: Authenticated management, captures, Test Sender, durable Internal Replay and snapshot-based Analytics. Errors use an error object with a code string. Full policies are documented in PROJECT.md.
+  title: HookScope Phase 7 API
+  version: 0.7.0
+  description: Bootstrap administrator and provisioned member keys; owner-scoped captures, Replay, Analytics, retention and metadata audit. Unknown or foreign resource IDs return 404. Full policies and deployment limits are documented in PROJECT.md and docs/SECURITY.md.
 servers:
   - url: http://localhost:8088
 security:
   - AdminKey: []
 paths:
+  /api/v1/auth/me:
+    get:
+      summary: Identify the currently authenticated administrator or member
+      responses:
+        '200': {description: 'id, name, role (ADMIN or MEMBER)'}
+        '401': {description: 'Missing, expired, disabled or revoked management key'}
+  /api/v1/users:
+    get:
+      summary: Administrator-only list of up to 100 most recent accounts; never includes key hashes
+      responses:
+        '200': {description: Object containing items array of ManagementUser}
+        '403': {description: ADMIN_REQUIRED}
+    post:
+      summary: Administrator-only provision of a member key; returned once and expires after 30 days
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 80}
+      responses:
+        '201':
+          description: Created account and one-time key
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/IssuedUserKey'}
+        '400': {description: Invalid name or privilege-changing fields}
+        '403': {description: ADMIN_REQUIRED}
+  /api/v1/users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      summary: Administrator-only account enable or disable; disabling also blocks owned endpoint intake
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enabled]
+              properties:
+                enabled: {type: boolean}
+      responses:
+        '200': {description: ManagementUser metadata; no key}
+        '403': {description: ADMIN_REQUIRED}
+        '404': {description: Account not found}
+        '409': {description: Bootstrap account is protected}
+  /api/v1/users/{id}/rotate-key:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      summary: Administrator-only key replacement; immediately revokes old key and sockets; does not enable disabled accounts
+      responses:
+        '200':
+          description: Replacement key with a new 30-day expiry; displayed once
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/IssuedUserKey'}
+        '403': {description: ADMIN_REQUIRED}
+        '404': {description: Account not found}
+        '409': {description: Bootstrap key is managed through environment configuration}
+  /api/v1/endpoints/{id}/policy:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    put:
+      summary: Replace owner-authorized endpoint expiry, retention and quota policy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EndpointPolicy'}
+      responses:
+        '200': {description: Updated endpoint including ownerId and policy}
+        '400': {description: Invalid policy or unknown fields}
+        '404': {description: Endpoint not found or not owned}
+  /api/v1/endpoints/{id}/rotate-token:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      summary: Replace public receive token; previously authorized in-flight requests may still finish
+      responses:
+        '200': {description: Updated endpoint with the new publicToken}
+        '404': {description: Endpoint not found or not owned}
+  /api/v1/endpoints/{id}/cleanup:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      summary: Run a bounded retention batch for one owned endpoint; Replay references stay pinned
+      responses:
+        '200': {description: 'deletedRequests count and busy boolean; busy means another sweep holds the advisory lock'}
+        '404': {description: Endpoint not found or not owned}
+  /api/v1/audit:
+    get:
+      summary: Same-snapshot 30-row metadata audit page; members see their owned data only
+      parameters:
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 10000, default: 1}
+        - name: endpointId
+          in: query
+          schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Audit page; never includes request/response bodies, hashes, keys or public tokens
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    maxItems: 30
+                    items: {$ref: '#/components/schemas/AuditLog'}
+                  total: {type: integer}
+                  page: {type: integer}
+                  pageSize: {type: integer, const: 30}
+        '400': {description: Invalid or duplicate/unknown query key}
+        '401': {description: Unauthorized}
   /api/v1/dashboard/summary:
     get:
-      summary: Aggregate all endpoints accessible to the authenticated local administrator
+      summary: Aggregate all endpoints accessible to the authenticated principal; members are restricted to their own
       description: Read-only PostgreSQL snapshot. Includes EXTERNAL/TEST/REPLAY. No body, headers, query or public token returned. Unknown/duplicate query keys are rejected.
       parameters:
         - $ref: '#/components/parameters/AnalyticsFrom'
@@ -40,7 +163,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Analytics'}
-        '400': {description: Invalid UUID, period or query}
+        '400': {description: 'Invalid UUID, period or query'}
         '401': {description: Unauthorized}
         '404': {description: Endpoint not found}
         '429': {description: Management rate limit exceeded}
@@ -77,7 +200,7 @@ paths:
         '401': {description: Unauthorized}
         '404': {description: Original request not found}
         '409': {description: Disabled endpoint or idempotency key conflict}
-        '429': {description: Rate limit exceeded}
+        '429': {description: Management rate limit or REPLAY_JOB_QUOTA; at most 1000 retained jobs per endpoint}
   /api/v1/endpoints/{id}/replays:
     parameters:
       - $ref: '#/components/parameters/Id'
@@ -144,13 +267,14 @@ paths:
         '200': {description: 'Object containing items array'}
         '401': {description: Unauthorized}
     post:
-      summary: Create endpoint
+      summary: Create endpoint owned by the authenticated principal; 20 per member or 1000 for bootstrap
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [name]
               properties:
                 name: {type: string, minLength: 1, maxLength: 80}
@@ -161,6 +285,12 @@ paths:
   /api/v1/endpoints/{id}:
     parameters:
       - $ref: '#/components/parameters/Id'
+    delete:
+      summary: Delete an owned endpoint and its captures/config/terminal Replay graph; retain audit metadata
+      responses:
+        '200': {description: Object containing deletedRequests count}
+        '404': {description: Endpoint not found or not owned}
+        '409': {description: REPLAY_IN_PROGRESS; cancel or wait first}
     get:
       summary: Get endpoint
       responses:
@@ -169,6 +299,12 @@ paths:
   /api/v1/endpoints/{id}/requests:
     parameters:
       - $ref: '#/components/parameters/Id'
+    delete:
+      summary: Clear captures and terminal Replay jobs/attempts in one transaction
+      responses:
+        '200': {description: Object containing deletedRequests count}
+        '404': {description: Endpoint not found or not owned}
+        '409': {description: REPLAY_IN_PROGRESS; no partial deletion}
     get:
       summary: List captures with server-side filters and same-snapshot total
       parameters:
@@ -202,7 +338,7 @@ paths:
           schema: {type: string, enum: [newest, oldest], default: newest}
       responses:
         '200': {description: 'items, total, page, pageSize (30)'}
-        '400': {description: Invalid, repeated or unknown query parameter}
+        '400': {description: 'Invalid, repeated or unknown query parameter'}
         '401': {description: Unauthorized}
         '404': {description: Endpoint not found}
   /api/v1/requests/{id}:
@@ -273,10 +409,10 @@ paths:
       summary: Record a webhook (max 256 KiB, compression unsupported)
       responses:
         '200': {description: Default receipt or configured custom response; custom mode may return any status 200-599}
-        '404': {description: Unknown or disabled endpoint}
+        '404': {description: 'Unknown, disabled, expired endpoint or disabled owner'}
         '413': {description: Body too large}
         '415': {description: Unsupported content encoding}
-        '429': {description: Rate limit exceeded}
+        '429': {description: IP/endpoint rate or request/body storage quota exceeded; capture not stored}
         '503': {description: Storage unavailable}
     get: *ingestion
     put: *ingestion
@@ -295,6 +431,58 @@ paths:
         '503': {description: Database not ready}
 components:
   schemas:
+    ManagementUser:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        role: {type: string, enum: [ADMIN, MEMBER]}
+        enabled: {type: boolean}
+        keyExpiresAt: {type: [string, 'null'], format: date-time}
+        createdAt: {type: string, format: date-time}
+    IssuedUserKey:
+      allOf:
+        - $ref: '#/components/schemas/ManagementUser'
+        - type: object
+          properties:
+            key: {type: string, format: password, description: 'hsu_ plus 256 random bits; returned once, stored as SHA-256 only'}
+    EndpointPolicy:
+      type: object
+      additionalProperties: false
+      required: [enabled, expiresAt, retentionDays, rateLimitPerMinute, maxRequests, maxBodyStorageBytes]
+      properties:
+        enabled: {type: boolean}
+        expiresAt: {type: [string, 'null'], format: date-time, description: Explicit timezone; null means no receive expiry}
+        retentionDays: {type: [integer, 'null'], minimum: 1, maximum: 365, description: 'Null for manual retention; new default 7, legacy null preserved'}
+        rateLimitPerMinute: {type: integer, minimum: 1, maximum: 1200, default: 120}
+        maxRequests: {type: integer, minimum: 1, maximum: 100000, default: 10000}
+        maxBodyStorageBytes: {type: integer, minimum: 1, maximum: 1073741824, default: 67108864, description: Sum of retained raw body bytes; not total database disk usage}
+    AuditLog:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        actorId: {type: string, format: uuid}
+        ownerId: {type: string, format: uuid}
+        action: {type: string}
+        targetId: {type: [string, 'null'], format: uuid}
+        createdAt: {type: string, format: date-time}
+        details:
+          type: object
+          description: Allowlisted metadata; may be empty depending on action
+          additionalProperties: false
+          properties:
+            requests: {type: integer}
+            mode: {type: string, enum: [DEFAULT, CUSTOM]}
+            status: {type: integer}
+            delayMs: {type: integer}
+            replayId: {type: string, format: uuid}
+            maxAttempts: {type: integer}
+            enabled: {type: boolean}
+            expiresAt: {type: [string, 'null'], format: date-time}
+            retentionDays: {type: [integer, 'null']}
+            rateLimitPerMinute: {type: integer}
+            maxRequests: {type: integer}
+            maxBodyStorageBytes: {type: integer}
     Analytics:
       type: object
       description: Same-snapshot statistics; planned HTTP status is not business success or actual client receipt
@@ -487,7 +675,10 @@ components:
               type: array
               items: {$ref: '#/components/schemas/Pair'}
   securitySchemes:
-    AdminKey: {type: http, scheme: bearer}
+    AdminKey:
+      type: http
+      scheme: bearer
+      description: ADMIN_KEY grants full bootstrap access; administrator-provisioned hsu_ keys grant owner-scoped member access and expire in 30 days. Public receive tokens are never accepted. Authentication attempts share the management IP limiter.
   parameters:
     AnalyticsFrom:
       name: from

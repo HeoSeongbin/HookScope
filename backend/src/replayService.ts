@@ -1,3 +1,4 @@
+import type {Principal} from './securityPolicy.js';
 import type {Queue} from 'bullmq';
 import {z} from 'zod';
 import type {Repository} from './repository.js';
@@ -11,15 +12,15 @@ export function createReplayService(repo:Repository,key:string,queue:Queue){
  }
  let reconciling=false;
  return {
-  async create(requestId:string,input:unknown){
+  async create(requestId:string,input:unknown,actor?:Principal){
    const value=replayInputSchema.parse(input);const original=await repo.request(requestId);if(!original)throw new ReplayError(404,'REQUEST_NOT_FOUND');
    const endpoint=await repo.endpoint(original.endpointId);if(!endpoint?.enabled)throw new ReplayError(409,'ENDPOINT_DISABLED');replayPayload(original);
-   const job=await replayRepository.create(original,value.idempotencyKey,value.maxAttempts,queue.name);const enqueued=await enqueue(job);return {...await replayRepository.job(job.id),enqueuePending:!enqueued};
+   const job=await replayRepository.create(original,value.idempotencyKey,value.maxAttempts,queue.name,actor);const enqueued=await enqueue(job);return {...await replayRepository.job(job.id),enqueuePending:!enqueued};
   },
   async list(endpointId:string,input:unknown){const filters=replayListSchema.parse(input);if(!await repo.endpoint(endpointId))throw new ReplayError(404,'ENDPOINT_NOT_FOUND');return replayRepository.list(endpointId,filters.page,filters.status);},
   async job(id:string){const job=await replayRepository.job(id);if(!job)throw new ReplayError(404,'REPLAY_NOT_FOUND');return job;},
   async attempts(id:string){if(!await replayRepository.job(id))throw new ReplayError(404,'REPLAY_NOT_FOUND');return {items:await replayRepository.attempts(id)};},
-  async cancel(id:string){const job=await replayRepository.cancel(id);try{const queued=await bounded(queue.getJob(id));if(queued)await bounded(queued.remove());}catch{/* DB cancellation is authoritative even if Redis is unavailable or active. */}return job;},
+  async cancel(id:string,actor?:Principal){const job=await replayRepository.cancel(id,actor);try{const queued=await bounded(queue.getJob(id));if(queued)await bounded(queued.remove());}catch{/* DB cancellation is authoritative even if Redis is unavailable or active. */}return job;},
   async verify(proof:string|undefined,endpointId:string,method:string,body:Buffer,query:string){
    if(!proof)return undefined;
    const [id,signature,...extra]=proof.split('.');if(extra.length||!z.uuid().safeParse(id).success||!signature)throw new ReplayError(403,'REPLAY_PROOF_INVALID');

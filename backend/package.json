@@ -14,7 +14,9 @@
     "smoke:response": "tsx src/responseSmoke.ts",
     "worker": "tsx --env-file=../.env src/worker.ts",
     "smoke:replay": "tsx src/replaySmoke.ts",
-    "smoke:analytics": "tsx src/analyticsSmoke.ts"
+    "smoke:analytics": "tsx src/analyticsSmoke.ts",
+    "cleanup": "tsx src/cleanup.ts",
+    "smoke:security": "tsx src/securitySmoke.ts"
   },
   "dependencies": {
     "bullmq": "^5.81.6",

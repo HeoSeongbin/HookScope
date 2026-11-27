@@ -2,9 +2,9 @@
 
 Webhook Testing & Monitoring Platform. 실제 HTTP 요청을 받아 PostgreSQL에 저장하고 헤더·쿼리·본문을 분석하는 한국어 개발 콘솔입니다.
 
-현재 구현: **Phase 0–6**. 실시간 모니터·검색·분석, 사용자 정의 응답, Test Sender, Redis/BullMQ Internal Replay 및 실제 PostgreSQL 기반 Analytics를 지원합니다. 공개 데모 주소는 없습니다.
+현재 구현: **Phase 0–7**. 기존 수신·분석·Internal Replay·Analytics와 사용자별 접근 제어, 만료·보관·수신 한도 및 감사 이력을 지원합니다. 공개 데모 주소는 없습니다.
 
-![Phase 6 Analytics](docs/screenshots/phase6-desktop.png)
+![Phase 7 보안 및 운영](docs/screenshots/phase7-desktop.png)
 
 ## 주요 기능
 - 암호학적 난수로 고유 수신 URL 생성, 관리 키와 공개 토큰 분리
@@ -19,7 +19,8 @@ Webhook Testing & Monitoring Platform. 실제 HTTP 요청을 받아 PostgreSQL�
 - Endpoint별 응답 Status/Content-Type/Body/Header/지연 설정, 실제 HTTP Test Sender 및 TEST 이력·응답 스냅샷
 - 자체 Endpoint Internal Replay, 멱등 작업 생성·대기 취소·상태 필터, PostgreSQL 시도 이력과 원본 비교
 - 전체/Endpoint별 Analytics, 시간별 차트·Method 비율·예정 응답 Status 분포·최근 오류·처리시간 분석
-- 본문 크기 제한, 기본 Rate Limit, 준비 상태 확인, Docker Compose
+- 관리자 발급 사용자 키·Endpoint 소유권, DB 수신/보관 한도·만료·정리·감사 이력
+- 본문 크기 제한, Rate Limit, 준비 상태 확인, Docker Compose
 
 ## 스택 및 구조
 로컬 검증 버전: Node.js 24.12.0, TypeScript 5.9.3, Express 5.3.0, Drizzle 0.45.4, pg 8.23.1, React 19.3.1, Vite 8.3.8, Zod 4.6.7, Pino 10.4.0, Vitest 5.1.0, Socket.IO/server-client 4.8.4, ESLint 10.15.0. 컨테이너 Node.js는 24.22.3. PostgreSQL 17 및 Redis 7 Alpine 이미지 사용. 정확한 JS 의존성은 package-lock.json으로 고정합니다.
@@ -51,7 +52,7 @@ docker compose ps
 
 [관리 화면](http://localhost:8088)을 열고 .env의 ADMIN_KEY를 입력하세요. 이번 작업 환경에는 임의의 키가 담긴 .env가 이미 생성되어 있습니다. 해당 파일은 Git 및 Docker 빌드에서 제외됩니다. API는 localhost:3000, DB는 localhost:5432입니다. 호스트 포트는 루프백에만 바인딩됩니다. 8080 포트가 기존 서비스에 사용되고 있어 프론트 기본값을 8088로 정했습니다. 변경 시 FRONTEND_PORT와 FRONTEND_ORIGIN을 함께 수정하세요.
 
-DB 준비 후 API 시작 시 SQL 마이그레이션을 트랜잭션과 advisory lock 안에서 실행하고 schema_migrations에 기록합니다. 기존 DB도 0002–0005의 테이블·컬럼·인덱스를 자동 추가하며 데이터를 삭제하지 않습니다. frontend/backend/worker/postgres/redis 다섯 서비스의 healthcheck로 준비 상태를 확인합니다. Worker는 DB 확인 후 Redis heartbeat를 갱신합니다. Named Volume에 DB가 유지됩니다. Redis는 소스 개발용으로 localhost:6379에만 바인딩합니다.
+DB 준비 후 API 시작 시 SQL 마이그레이션을 트랜잭션과 advisory lock 안에서 실행하고 schema_migrations에 기록합니다. 기존 DB도 0002–0006의 테이블·컬럼·인덱스를 자동 추가하며 데이터를 삭제하지 않습니다. frontend/backend/worker/postgres/redis 다섯 서비스의 healthcheck로 준비 상태를 확인합니다. Worker는 DB 확인 후 Redis heartbeat를 갱신합니다. Named Volume에 DB가 유지됩니다. Redis는 소스 개발용으로 localhost:6379에만 바인딩합니다.
 
 ```powershell
 docker compose logs backend
@@ -128,7 +129,24 @@ Redis enqueue 실패에도 PostgreSQL의 PENDING을 유지하고 5초 주기 조
 
 API: `GET /api/v1/dashboard/summary`, `GET /api/v1/endpoints/:id/statistics`. 선택 query는 시간대가 포함된 ISO `from`/`to`이며 기본값은 최근 24시간입니다. Endpoint 수와 보관 전체 건수 외의 값은 선택 기간 기준입니다. Replay 시간은 시도 시작 시각 기준입니다. 상세 계약은 [PROJECT.md](PROJECT.md)와 [OpenAPI](docs/openapi.yaml)를 참고하세요.
 
-## 로컬 소스 개발
+## 사용자별 보안 및 운영
+기존 `.env`의 ADMIN_KEY로 로그인하면 전체 관리자입니다. **보안 및 운영 → 사용자 관리**에서 이름을 입력해 사용자 키를 발급하세요. 키는 한 번만 표시되며 SHA-256 해시만 DB에 저장하고 30일 후 만료됩니다. 사용자도 같은 로그인 화면을 사용하며 본인 Endpoint·수신·Replay·통계·감사만 조회/변경할 수 있습니다. 재발급은 이전 키를 폐기하고 비활성화는 API·Socket·소유 Endpoint 수신을 막습니다. 키 만료만으로 공개 수신이 중지되지는 않습니다.
+
+**Endpoint 운영 정책**에서 수신 활성화·만료 시각, 보관 일수, 분당 수신 수, 최대 요청 수와 원본 Body 합계 한도를 설정합니다. 사용자당 Endpoint 20개, 관리자 1000개이며 Endpoint 기본 한도는 분당 120건·보관 10000건·Body 합계 64MiB입니다. Endpoint별 Replay 작업도 최대 1000개로 제한하며 기존 멱등 키 재조회는 허용합니다. IP별 제한도 함께 적용됩니다. 한도를 낮춰도 기존 기록을 임의 삭제하지 않고 다음 수신부터 제한합니다.
+
+신규 Endpoint는 기본 7일 보관이고 기존 Endpoint는 수동 보관을 유지합니다. 60초마다 최대 20개 Endpoint에서 각 100개 만료 요청을 정리합니다. Replay 원본/시도와 연결된 수신은 pin되어 남으며 **요청 이력 삭제**에서 종료 Job/Attempt와 함께 정리합니다. 미완료 Replay가 있으면 전체 이력/Endpoint 삭제는 409입니다. 먼저 작업을 취소하거나 종료를 기다리세요. URL 재발급 후 이전 토큰으로 새로 승인되는 요청은 거부됩니다.
+
+감사 조회는 정책·설정·Replay·삭제·정리 등의 metadata를 30건씩 제공합니다. 본문·키/해시·공개 토큰은 포함하지 않습니다. 감사는 90일 보관하며 DB 관리자에 의한 변조 방지까지 보장하지 않습니다. 운영자가 직접 정리 배치를 실행할 때는 아래 명령을 사용합니다.
+
+```powershell
+docker compose exec -T backend npm run cleanup
+# 소스 환경
+node --env-file=.env node_modules/tsx/dist/cli.mjs backend/src/cleanup.ts
+```
+
+실제 공개 배포에서 추가 확인할 사항은 [SECURITY.md](docs/SECURITY.md)를 참고하세요.
+
+## 로컬 소스 개발 명령
 ```powershell
 npm ci
 docker compose up -d postgres redis
@@ -144,13 +162,13 @@ npm run dev:web
 Vite는 /api, /h, /health와 /socket.io의 polling/WebSocket을 localhost:3000으로 프록시합니다. Compose API와 소스 API를 동시에 같은 포트로 실행하지 마세요.
 
 ## 실시간 동기화
-Socket은 ADMIN_KEY를 handshake.auth로 보내고 서버에서 인증한 뒤 선택한 Endpoint의 Room에 가입합니다. UUID 및 Endpoint 존재를 검사하며 공개 수신 토큰으로 관리 연결을 만들 수 없습니다. 현재는 단일 로컬 관리자가 모든 Endpoint를 관리합니다.
+Socket은 ADMIN_KEY를 handshake.auth로 보내고 서버에서 인증한 뒤 선택한 Endpoint의 Room에 가입합니다. UUID 및 Endpoint 존재를 검사하며 공개 수신 토큰으로 관리 연결을 만들 수 없습니다. ADMIN_KEY 관리자는 모든 Endpoint를 관리하고 사용자 키는 자기 Endpoint만 관리합니다. Socket 구독과 이벤트 전달에서도 같은 범위를 검사합니다.
 DB 저장 후 `webhook:received` 이벤트에 endpointId/requestId/method/receivedAt만 담아 전송합니다. 브라우저는 본문을 이벤트에서 누적하지 않고 REST API의 현재 페이지로 목록과 건수를 갱신합니다. 최근 512개 ID의 중복 알림을 무시하고 짧은 시간의 이벤트를 합쳐 조회합니다.
 최초 연결·재연결은 Room 가입 ack 이후 REST를 재조회하므로 연결이 끊긴 동안 저장된 요청도 복구됩니다. 두 탭은 독립적으로 동기화하며 Endpoint 변경·로그아웃 시 기존 연결과 리스너를 정리합니다. 상단에서 연결 중/실시간/재연결/오류 상태를 확인할 수 있고 수동 새로고침도 유지합니다.
 이벤트는 best effort입니다. 알림 발행 실패가 이미 저장된 요청을 취소하지 않습니다. 연결 중 알림이 유실되면 수동 갱신·탭 복귀·다음 알림·재연결로 복구할 수 있습니다. Redis adapter, 분산 Room 및 영속 이벤트 큐는 아직 구현하지 않았습니다.
 
 ## API 및 테스트
-관리 API에는 `Authorization: Bearer <ADMIN_KEY>`가 필요합니다. [API 계약](docs/openapi.yaml), [설계](PROJECT.md), [아키텍처](docs/ARCHITECTURE.md), [진행 기록](docs/PROGRESS.md), [결정 기록](docs/DECISIONS.md)을 참고하세요.
+관리 API에는 `Authorization: Bearer <ADMIN_KEY 또는 사용자 키>`가 필요합니다. [API 계약](docs/openapi.yaml), [설계](PROJECT.md), [아키텍처](docs/ARCHITECTURE.md), [진행 기록](docs/PROGRESS.md), [결정 기록](docs/DECISIONS.md)을 참고하세요.
 
 ```powershell
 npm run typecheck
@@ -162,25 +180,26 @@ docker compose exec -T backend npm run smoke:filters
 docker compose exec -T backend npm run smoke:response
 docker compose exec -T backend npm run smoke:replay
 docker compose exec -T backend npm run smoke:analytics
+docker compose exec -T backend npm run smoke:security
 npx playwright install chromium
 npx playwright test --config frontend/playwright.config.ts
 ```
 
-Vitest/Supertest 및 실제 Socket/HTTP 클라이언트 테스트 **137개**가 통과했습니다. Repository 더블 검증과 실제 PostgreSQL 검증을 구분합니다. 실제 Compose smoke 5종은 기존 수신·필터·응답 설정·Replay와 신규 Analytics를 확인합니다. Analytics는 실제 HTTP 수신 후 DB에 명시적 시각/상태/시도 fixture를 설정하여 UTC·offset·부분 시간·종료 경계, Endpoint 격리, P95, 빈 값, 원문 미노출을 확인합니다. 각 smoke는 자신의 데이터를 정리합니다.
-Compose 기반 Playwright **8개**는 기존 7개 회귀와 Analytics의 실제 수신 집계·오류 상세 연결·빈 기간·Endpoint 격리·전체 범위 및 데스크톱/모바일 넘침을 확인합니다. E2E는 실제 Endpoint와 테스트 요청을 남기며 화면 수치는 DB 데이터만 사용합니다. Phase 6 migration 재실행 후 요청 **467건**, Replay 작업 **10건**, 시도 **14건**이 유지됐습니다. CI에 Analytics smoke를 추가했으며 원격 CI 실행은 미검증입니다. 과거 Phase의 검증은 [진행 기록](docs/PROGRESS.md)에 유지합니다.
+Vitest/Supertest 및 실제 Socket/HTTP 클라이언트 테스트 **168개**가 통과했습니다. Repository 더블 검증과 실제 PostgreSQL 검증을 구분합니다. 실제 Compose smoke 6종은 기존 수신·필터·응답 설정·Replay와 신규 Analytics를 확인합니다. Analytics는 실제 HTTP 수신 후 DB에 명시적 시각/상태/시도 fixture를 설정하여 UTC·offset·부분 시간·종료 경계, Endpoint 격리, P95, 빈 값, 원문 미노출을 확인합니다. Security smoke는 키 해시·만료·폐기, 사용자별 REST/Socket/Replay/통계 격리, 동시 수신/보관 한도, pin 보존과 감사 metadata도 검증합니다. 각 smoke는 자신의 데이터를 정리합니다.
+Compose 기반 Playwright **9개**는 기존 8개 회귀와 사용자 콘솔의 키 발급·소유권·운영 정책·만료·URL 재발급·삭제·감사 및 데스크톱/모바일 넘침을 확인합니다. 운영 한도를 유지하면서 남은 RateLimit이 부족하면 테스트 fixture가 다음 창을 기다립니다. E2E는 실제 Endpoint와 테스트 요청을 남기며 화면 수치는 DB 데이터만 사용합니다. Phase 7 소유권 migration 전후 Endpoint **87개**, 요청 **520건**, Replay 작업 **12건**, 시도 **17건**과 원문/파싱 지문이 일치했습니다. 기존 87개 Endpoint의 수동 보관도 유지했습니다. CI에 Security smoke를 추가했으며 원격 CI 실행은 미검증입니다. 과거 Phase의 검증은 [진행 기록](docs/PROGRESS.md)에 유지합니다.
 
 ## 보안·보관 정책 및 제약
-- 로컬 단일 관리자 MVP입니다. ADMIN_KEY를 공유하면 같은 관리 권한을 갖습니다. 다중 사용자·소유권·로그인 세션은 미구현입니다.
+- 관리자가 발급하는 사용자 키와 소유권을 지원합니다. ADMIN_KEY 공유자는 전체 관리 권한을 갖습니다. 공개 가입·비밀번호·SSO·쿠키 세션은 제공하지 않습니다.
 - 수신 본문 256KiB, 관리 JSON 16KiB, URL 8KiB 제한. 압축 본문은 415. 수신 IP별 120회/분, 관리 IP별 300회/분이며 메모리 기반 단일 인스턴스용입니다.
 - OPTIONS는 CORS 응답 204로 처리하며 저장하지 않습니다. HEAD와 그 외 메서드는 405입니다.
 - Raw Body는 Base64로 저장합니다. UTF-8 화면은 미리보기이며 서명 검증에는 API 원본 바이트를 사용해야 합니다. multipart/binary는 파싱 없이 원본만 같은 제한으로 저장합니다.
 - Authorization, Cookie, token/secret/API-key 계열 헤더는 저장 전에 마스킹합니다. Body·Query는 원문이 저장되므로 실제 자격 증명을 보내지 마세요. 요청 IP는 저장하지 않습니다.
-- 자동 만료·삭제 UI·전체 저장 용량 제한은 후속 Phase입니다. 현재 데이터는 수동 DB 정리 전까지 보관됩니다. 데이터가 필요하면 Volume을 유지하세요.
+- Endpoint 만료·삭제 UI·요청/원본 Body 보관 한도를 지원합니다. 기존 Endpoint는 수동 보관, 신규 기본 보관은 7일입니다. Replay 참조는 자동 정리에서 보존되므로 보관 기간을 넘겨 남을 수 있습니다. Body 합계 한도는 전체 DB 디스크 용량 한도가 아닙니다.
 - 전체 응답 소요시간은 아직 측정하지 않습니다. durationMs는 저장 전 캡처 준비 시간이며 responseStatus는 예정 응답입니다. 실제 전송 완료는 구조화 로그의 RESPONSE_SENT입니다.
 - Light Mode·외부 URL 전송은 제공하지 않습니다. 모든 프로세스 강제 종료·부하·멀티 인스턴스 장애 조합은 미검증입니다.
 - Analytics는 읽기 시점 집계이며 전체 보관 건수도 DB에서 계산합니다. 대규모 장기 집계 부하는 미검증이며 캐시·사전 집계·전체 wire 응답시간 수집은 제공하지 않습니다.
 - 키워드 검색은 Endpoint 범위의 텍스트 스캔입니다. 대량 검색·부하 성능은 미검증이며 JSON 트리는 분기당 100개씩, 최대 32단계까지만 펼칩니다. 마스킹은 키 이름 휴리스틱이며 비밀정보의 완전한 탐지를 보장하지 않습니다.
-- 배포된 서비스가 없습니다. 공개 운영에는 HTTPS, 계정별 권한, 수신/보관 한도, 정리 작업, 공유 Rate Limit을 추가해야 합니다.
-- 2026-11-24 실행한 `npm audit` 및 `npm audit --omit=dev`는 모두 0건이었습니다. Phase 6은 새 의존성을 추가하지 않았으며 Compose의 npm ci도 0건을 보고했습니다. 로컬 backend 이미지는 테스트 실행을 위해 개발 의존성도 포함합니다.
+- 배포된 서비스가 없습니다. 실제 HTTPS·운영 프록시·공유 Rate Limit·디스크/백업 복구 등은 [공개 배포 점검](docs/SECURITY.md)을 따라 별도 검증해야 합니다.
+- 2026-11-27 실행한 `npm audit` 및 `npm audit --omit=dev`는 모두 0건입니다. Phase 7은 새 의존성을 추가하지 않았으며 Compose의 npm ci도 0건을 보고했습니다. 로컬 backend 이미지는 테스트 실행을 위해 개발 의존성도 포함합니다.
 
-스크린샷: [데스크톱](docs/screenshots/phase6-desktop.png) · [모바일](docs/screenshots/phase6-mobile.png). 다음 단계는 **Phase 7 보안 및 운영 기능**입니다.
+스크린샷: [데스크톱](docs/screenshots/phase7-desktop.png) · [모바일](docs/screenshots/phase7-mobile.png). 다음 단계는 **Phase 8 UI/UX 및 성능**입니다.

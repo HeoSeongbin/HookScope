@@ -1,4 +1,4 @@
-export type Endpoint = {id:string;name:string;publicToken:string;enabled:boolean};
+export type Endpoint = {id:string;name:string;publicToken:string;enabled:boolean;ownerId?:string;expiresAt?:string|null;retentionDays?:number|null;rateLimitPerMinute?:number;maxRequests?:number;maxBodyStorageBytes?:number};
 export type Capture = {id:string;endpointId?:string;method:string;receivedAt:string;contentType:string;bodySize:number;responseStatus:number;parseError:string|null;headers?:unknown;query?:unknown;parsedBody?:unknown;rawBody?:string;durationMs?:number;source?:'EXTERNAL'|'TEST'|'REPLAY';replayAttemptId?:string|null;responseBody?:string|null;responseHeaders?:unknown;responseDelayMs?:number};
 export type Filters = {q:string;method:string;status:string;contentType:string;from:string;to:string;sort:string};
 export const emptyFilters: Filters = {q:'',method:'',status:'',contentType:'',from:'',to:'',sort:'newest'};

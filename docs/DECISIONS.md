@@ -1,5 +1,17 @@
 # Architecture Decision Records
 
+## ADR-022 · 관리자 발급 사용자 키와 bootstrap 호환 (채택, Phase 7)
+기존 ADMIN_KEY 로그인을 유지하면서 사용자별 256bit 난수 키를 관리자만 발급한다. 무작위 비밀값이므로 SHA-256 해시만 저장하고 30일 만료·재발급·비활성화를 지원한다. 비밀번호/공개 가입/쿠키 세션은 이번 범위에 추가하지 않는다. 기존 Endpoint를 보호된 bootstrap 계정에 연결하고 일반 사용자는 본인 소유 범위만 관리한다. 공개 수신 토큰은 신원으로 인정하지 않는다. 이 설계를 공개 회원가입 시스템 구현으로 표현하지 않는다.
+
+## ADR-023 · 소유권을 REST·Socket·Replay·Analytics에 함께 적용 (채택, Phase 7)
+인증 후 scoped Repository로 목록·상세·설정·테스트를 제한하고 Replay ID도 원본 Endpoint 소유권을 검사한 뒤 처리한다. 전역 Analytics SQL에도 owner 조건을 바인딩한다. Socket은 handshake/구독뿐 아니라 전달 시에도 DB 신원을 확인하여 폐기된 키로 이벤트가 계속 흐르지 않게 한다. 관리 API 폐기는 연결을 끊고 10초 재확인도 유지한다. DB 오류는 권한 허용으로 대체하지 않는다. Express가 경로 대소문자를 구분하지 않으므로 자원 경로 검사에도 같은 규칙을 적용한다. 대소문자 변형 5개 회귀를 추가해 소문자 전용 검사 우회를 막았다.
+
+## ADR-024 · 원자적인 수신/Replay 한도와 보존 정리 (채택, Phase 7)
+Redis 장애와 일반 수신의 독립성을 유지하려고 Endpoint 한도는 PostgreSQL 행 잠금과 저장 건수/Body 합계로 계산한다. 일반·TEST·REPLAY에 같은 경계를 적용한다. 별도 작업 이력도 Endpoint당 1000개로 제한하고 기존 멱등 키는 한도에서도 반환한다. 신규 보관 기본값은 7일이지만 기존 Endpoint는 null로 유지하여 migration 자체가 과거 요청을 삭제하지 않게 한다. 정리는 60초 주기 제한 배치이고 모든 Replay 원본/연결된 수신을 pin한다. 전체 이력 삭제만 종료 Job/Attempt까지 함께 정리하며 미완료 작업에서는 거부한다. 이로 인해 보관 기간보다 오래 남는 pin과 용량 한도 차단을 UI/문서에 설명한다.
+
+## ADR-025 · 트랜잭션 감사와 실제 운영 한도를 지키는 검증 (채택, Phase 7)
+관리 변경과 Replay 생성/취소를 동일 DB 트랜잭션에 감사 metadata로 남긴다. 본문·응답 본문·키/해시/토큰을 제외하고 삭제 후에도 대상 UUID와 건수는 남긴다. 감사는 90일 보관하며 tamper-proof라고 주장하지 않는다. 공유 프록시 IP에서 전체 E2E가 관리 한도를 소진한 것을 확인했다. 한도를 늘리는 대신 RateLimit 헤더와 테스트 fixture로 새 창을 기다리도록 했다. 과거 Analytics 시간 fixture는 테스트 Endpoint의 보관을 null로 정해 배경 정리와 경쟁하지 않게 한다.
+
 ## ADR-019 · 읽기 전용 동일 스냅샷 Analytics (채택, Phase 6)
 수신 경로에 집계 쓰기나 Redis 캐시를 추가하지 않고 PostgreSQL의 실제 수신/시도 행을 집계한다. Endpoint별 또는 단일 관리자의 전체 권한 범위를 SQL에 바인딩하고 REPEATABLE READ READ ONLY에서 합계·분포·최근 목록을 함께 읽는다. 기간은 최대 31일, 시작 포함/종료 미포함, UTC hour 기준으로 고정하고 빈 버킷만 0으로 채운다. metadata만 반환하며 쿼리별 5초 timeout과 시각 인덱스를 적용한다. 전체 보관 건수 쿼리와 장기 검색의 대규모 부하 성능은 미검증이다.
 
@@ -22,8 +34,8 @@ SVG 시간 차트와 HTML 비율 막대·수치 표로 745개 이하 버킷을 �
 ## ADR-001 · Express 5와 Drizzle (채택)
 HTTP 수신 및 미들웨어 경계를 명시하기 위해 Express를 사용한다. 작은 Phase 1 모델과 PostgreSQL JSONB를 직접 다루고 SQL 마이그레이션을 검토하기 위해 Drizzle을 선택한다. npm audit 결과에 따라 Drizzle 0.45.4와 Vitest 5.1.0으로 상향했다.
 
-## ADR-002 · 단일 로컬 관리자와 공개 토큰 분리 (채택)
-ADMIN_KEY로 모든 관리 API를 보호하고 24바이트 난수 publicToken은 수신 식별에만 사용한다. 계정 및 소유권 모델은 Phase 7. 현재 공유 키 정책을 다중 사용자 인증으로 표현하지 않는다.
+## ADR-002 · 단일 로컬 관리자와 공개 토큰 분리 (Phase 1, ADR-022로 확장)
+ADMIN_KEY로 모든 관리 API를 보호하고 24바이트 난수 publicToken은 수신 식별에만 사용한다. Phase 1에서는 공유 키 정책이었으며 Phase 7에서 ADR-022의 사용자 키/소유권으로 확장했다.
 
 ## ADR-003 · 원본 바이트 및 중복값 (채택)
 express.raw inflate:false와 Base64 text 저장으로 UTF-8 정규화 없이 원본 바이트를 복구한다. JSON 파싱 실패도 정상 기록한다. 중복 헤더는 쌍 배열, Query/Form은 값 배열. 민감 헤더는 저장 전 제거하므로 헤더 원문 전체 보존보다 비밀 보호를 우선한다.
@@ -32,7 +44,7 @@ express.raw inflate:false와 Base64 text 저장으로 UTF-8 정규화 없이 원
 PostgreSQL을 기록의 기준으로 유지한다. Phase 2의 인증 Room과 REST 동기화, Phase 5의 BullMQ Internal Replay Worker를 구현했다. Socket.IO Redis adapter 및 공유 limiter는 아직 제공하지 않는다.
 
 ## ADR-008 · 인증된 단일 Endpoint Room (채택, Phase 2)
-REST와 Socket에 공통 상수 시간 관리자 키 검증을 적용한다. Socket handshake.auth로 키를 전달하고 URL/query/localStorage에는 보관하지 않는다. 공개 수신 토큰은 Socket 인증에 사용할 수 없다. 서버에서 UUID·Endpoint 존재·관리 권한을 확인한 뒤 endpoint:{id} Room에 가입한다. 현재 단일 관리자는 모든 기존 Endpoint 권한이 있으며 사용자별 소유권은 Phase 7이다. 임의 room 이름을 받지 않는다. 구독 변경 시 이전 Room을 떠나고 Socket 종료 시 정리한다. 브라우저 Origin은 polling과 WebSocket 모두 검사한다.
+REST와 Socket에 공통 상수 시간 관리자 키 검증을 적용한다. Socket handshake.auth로 키를 전달하고 URL/query/localStorage에는 보관하지 않는다. 공개 수신 토큰은 Socket 인증에 사용할 수 없다. 서버에서 UUID·Endpoint 존재·관리 권한을 확인한 뒤 endpoint:{id} Room에 가입한다. Phase 2의 단일 관리자 범위는 Phase 7 ADR-023에서 사용자별 소유권으로 확장했다. 임의 room 이름을 받지 않는다. 구독 변경 시 이전 Room을 떠나고 Socket 종료 시 정리한다. 브라우저 Origin은 polling과 WebSocket 모두 검사한다.
 
 ## ADR-009 · 커밋 이후 best-effort 알림과 REST 동기화 (채택, Phase 2)
 수신 코드는 PublishReceived 콜백만 알고 Socket.IO 서버를 직접 참조하지 않는다. Drizzle insert가 완료된 후 본문 없는 메타데이터를 발행한다. 발행 예외는 EVENT_PUBLISH_FAILED로 구분하고 저장 성공 응답은 유지한다. 이벤트의 개별 클라이언트 전달을 보증했다고 로그에 기록하지 않는다. DB outbox나 재전송 큐는 추가하지 않는다.

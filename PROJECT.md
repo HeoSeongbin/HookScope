@@ -3,7 +3,7 @@
 Webhook Testing & Monitoring Platform. 실제 HTTP 요청을 수신하고 PostgreSQL에 영속 저장하여 개발자가 내용을 분석하는 포트폴리오 프로젝트다.
 
 ## 이번 범위
-Phase 0–5의 기능을 유지하고 Phase 6 Analytics 및 모니터링을 구현한다. 실제 DB 기반 Dashboard, 요청량/Method/예정 응답 Status/시간별/Endpoint별 집계와 처리시간 분석을 제공한다. 외부 URL 전송·계정 소유권·보관 정책은 이번 범위가 아니다.
+Phase 0–6을 유지하고 Phase 7 인증·사용자별 Endpoint·Rate Limit·만료·보관·정리·감사 이력을 구현한다. 기존 관리 키를 bootstrap 관리자에 연결하며 관리자가 발급한 사용자별 키로 소유권을 구분한다. 공개 회원가입·비밀번호·외부 Replay·Phase 8 UI 개편은 포함하지 않는다.
 
 ## 기술 스택
 Node.js 24 LTS, TypeScript strict, Express 5, Drizzle ORM 및 node-postgres, PostgreSQL 17, Zod, Pino, React 19, Vite 8, Vitest 5, Supertest, Redis 7 및 BullMQ 5. 실제 설치 버전은 package-lock.json이 기준이다. Redis는 Replay 작업 전달에 사용하며 일반 수신 경로에서는 사용하지 않는다.
@@ -15,7 +15,8 @@ DB 실패는 503이며 성공 저장으로 표현하지 않는다. 저장 성공
 HTTP 책임은 app.ts, 파싱은 body.ts, 영속화는 repository.ts, DB 모델은 schema.ts, 시작 및 종료는 server.ts에 둔다.
 
 ## 데이터 모델
-webhook_endpoints: UUID PK, 이름, 암호학적 192bit publicToken UNIQUE, enabled, UTC createdAt.
+management_users: UUID, 이름, 역할, enabled, 키 해시/만료 시각. audit_logs: 행위자/소유자/대상 UUID, action, metadata, UTC 시각.
+webhook_endpoints: UUID PK, 이름, 암호학적 192bit publicToken UNIQUE, enabled, ownerId FK, expiresAt/보관/한도, UTC createdAt.
 webhook_requests: UUID PK, Endpoint FK CASCADE, method, 토큰이 제거된 path, 중복값 배열 query JSONB, 순서 및 중복을 보존한 마스킹 headers JSONB, rawBody Base64, parsedBody JSONB, parseError, contentType, bodySize, receivedAt UTC, responseStatus, durationMs, source(EXTERNAL/TEST/REPLAY), replayAttemptId UNIQUE FK, responseBody/responseHeaders/responseDelayMs 계획 스냅샷.
 webhook_response_configs: Endpoint UUID PK/FK CASCADE, mode, status, contentType, body, headers JSONB, delayMs, updatedAt. 설정 upsert는 원자적이며 요청별 스냅샷은 이후 설정 변경으로 수정하지 않는다.
 인덱스: endpointId + receivedAt. durationMs는 DB insert 전 캡처 준비 시간으로 전체 응답 지연이 아니다. 응답 상태는 예정 응답이며 실제 소켓 전달 보증이 아니다. 실제 finish는 별도 RESPONSE_SENT 로그로 기록한다.
@@ -29,23 +30,36 @@ GET /health/live, /health/ready. 오류는 {error:{code}} 규약.
 상세 API는 rawEncoding: base64를 제공한다. JSONB의 객체 키 순서는 원본 보증 대상이 아니므로 서명 검증에는 rawBody만 사용한다.
 
 ## 보안 및 응답 정책
-단일 로컬 관리자 ADMIN_KEY(32자 이상) Bearer 인증. 공개 토큰과 완전히 분리하며 모든 관리 API에 인증을 적용한다. Socket.IO handshake.auth.token에도 동일한 관리자 키를 검증한다. 이 로컬 관리자는 모든 기존 Endpoint를 관리할 수 있으나 공개 수신 토큰으로는 Socket 연결할 수 없다. 계정별 소유권은 Phase 7 대상이다.
+ADMIN_KEY(32자 이상)는 전체 관리 권한의 bootstrap 관리자 키다. 사용자 키는 관리자가 발급한 256bit 난수이고 SHA-256 해시만 DB에 저장하며 30일 만료한다. 공개 수신 토큰과 완전히 분리하고 REST/Socket에서 동일한 신원을 검증한다. 일반 사용자는 자기 Endpoint·요청·Replay·통계·감사만 관리하며 관리자는 전체 범위를 관리한다. 상세 계약은 Phase 7 항목을 따른다.
 키는 React 메모리에만 저장한다. 수신 Body 256KiB, 관리 JSON 16KiB, 수신 URL 8KiB, Node 기본 Header 제한 16KiB. 압축 Body는 415. 수신 IP별 120회/분, 관리 IP별 300회/분의 단일 프로세스 제한.
 인증/쿠키/API 키 계열 헤더는 저장 전에 마스킹한다. 그 외 본문·쿼리에는 비밀값이 포함될 수 있다. React 텍스트 렌더링으로 실행을 방지한다. IP는 저장하지 않는다. 토큰 경로와 Body는 로그에 남기지 않는다.
 외부 URL 전송은 제공하지 않는다. Internal Replay는 아래 Phase 5 계약을 따른다. 기본 응답은 200 {requestId,message:'Request recorded'}. 사용자 정의 응답은 아래 Phase 4 제한을 따른다. 공통 보안 헤더와 허용 origin CORS를 적용한다.
-보관 자동 정리·전체 저장량 한도는 Phase 7로 예정. Phase 1 데이터는 수동 삭제 전까지 유지되므로 로컬 개발에서만 사용한다. 공개 서비스 준비 완료로 간주하지 않는다.
+신규 Endpoint 기본 보관은 7일이고 기존 Endpoint는 수동 보관을 유지한다. DB 기반 수신/보관 한도와 제한된 자동 정리를 적용한다. 실제 디스크 전체 용량·HTTPS·복구 훈련·멀티 인스턴스는 별도 검증이 필요하며 공개 서비스 준비 완료로 간주하지 않는다.
 
 ## 향후 Phase 및 최종 조건
-2: Socket.IO 인증 Room·재연결 REST 동기화. 3: 검색·필터·JSON Tree. 4: 응답 설정·자체 Test Sender. 5: BullMQ Internal Replay·시도 기록·백오프. 6: 실제 DB 기반 통계(이번 구현). 7: 사용자별 권한·만료·보관·감사. 8: 테마·접근성·성능. 9: E2E·공개 포트폴리오 문서 및 시연.
+2: Socket.IO 인증 Room·재연결 REST 동기화. 3: 검색·필터·JSON Tree. 4: 응답 설정·자체 Test Sender. 5: BullMQ Internal Replay·시도 기록·백오프. 6: 실제 DB 기반 통계. 7: 사용자별 권한·만료·보관·감사(이번 구현). 8: 테마·접근성·성능. 9: E2E·공개 포트폴리오 문서 및 시연.
 Replay는 PostgreSQL 작업/시도 이력과 멱등성 제약을 함께 설계하며 Job ID만 신뢰하지 않는다. 외부 전송은 허용 목록, DNS/IP 검증, redirect 금지, timeout 및 응답 크기 제한 후 별도 제공한다.
 Socket.IO는 DB 저장 이후 식별자 이벤트만 발행하고 REST 재조회가 정합성의 기준이 된다. 멀티 인스턴스에서는 Redis adapter와 공유 rate limiter가 필요하다.
-최종 완료는 사용자 원문 28절의 전체 기능 및 테스트 조건을 충족한 시점이며, 현재는 Phase 0–6의 구현 및 명시한 검증 범위만 완료로 평가한다.
+최종 완료는 사용자 원문 28절의 전체 기능 및 테스트 조건을 충족한 시점이며, 현재는 Phase 0–7의 구현 및 명시한 검증 범위만 완료로 평가한다.
 
 ## 테스트 전략
 파서/브라우저 이벤트 중복 방지 단위 테스트, Supertest 및 실제 Socket 클라이언트 통합 테스트, 실제 PostgreSQL HTTP→DB→Socket→REST 스모크 테스트, Compose 기반 브라우저 E2E를 구분한다. 타입 검사, ESLint, Production Build를 실행한다. 결과 및 차단 사항은 docs/PROGRESS.md 참조.
 
+## Phase 7 보안 및 운영 계약
+- migration 0006: management_users와 audit_logs, Endpoint ownerId/만료/보관/한도 컬럼. bootstrap UUID는 00000000-0000-4000-8000-000000000001이며 기존 Endpoint를 연결한다. 기존 원본/파싱 데이터와 Replay FK는 수정하지 않는다. 기존 retentionDays는 null, 신규 기본값만 7이다.
+- GET /auth/me, 관리자 전용 GET/POST /users(최신 100개 목록), PATCH /users/:id {enabled}, POST /users/:id/rotate-key. 사용자 키는 한 번만 반환하며 30일 후 만료한다. 재발급은 이전 키를 폐기하고 비활성 계정을 자동 활성화하지 않는다. bootstrap 계정 변경은 거부하며 키 교체는 환경 설정/재시작으로 한다. 공개 가입·암호·쿠키 세션은 없다.
+- securityService는 매 REST 요청에서 키/활성/만료를 확인하고 scoped Repository를 주입한다. 일반 사용자의 Endpoint 목록/생성/조회·Request 상세·응답 설정·Test Sender·Replay 생성/조회/시도/취소·Analytics·감사를 같은 소유권으로 제한한다. UUID를 알아도 타인 자원은 404다. ownerId/role을 사용자 입력으로 정하지 않는다.
+- Socket handshake/Room 가입/이벤트 전송 시 인증과 소유권을 확인한다. 키 폐기/계정 비활성화 시 해당 사용자 Socket을 즉시 끊고, 10초 재확인으로 만료/DB 외부 변경도 감지한다. 인증 DB 오류에서는 이벤트를 보내지 않는다. 같은 사용자에게 이미 전달된 데이터나 승인된 진행 중 HTTP 요청을 소급 취소하지는 않는다.
+- 인증 전 IP별 관리 요청 300회/분, 인증 후 사용자별 300회/분, Socket handshake IP별 120회/분(최대 10000개 메모리 항목), 기존 수신 IP별 120회/분. IP/사용자/Socket 제한은 단일 프로세스이며 공유 프록시 IP는 한도를 공유한다. Endpoint별 수신 한도는 PostgreSQL의 행 잠금과 최근 1분 저장 건수로 집행한다.
+- 사용자별 Endpoint 최대 20개, bootstrap 최대 1000개. Endpoint별 Replay 작업은 최대 1000개이며 가득 차도 기존 멱등 키 재조회는 허용한다. Endpoint 정책은 enabled, expiresAt(ISO/null), retentionDays(1–365/null), rateLimitPerMinute(1–1200, 기본 120), maxRequests(1–100000, 기본 10000), maxBodyStorageBytes(1–1GiB, 기본 64MiB). 기존 IP 한도를 늘리지는 않는다. 만료/비활성/비활성 소유자 수신은 404, 수신/보관 한도는 429다. 계정 키 만료 자체는 계정 비활성화가 아니므로 Endpoint 수신을 중단하지 않는다.
+- 일반/TEST/REPLAY 저장 모두 같은 트랜잭션 안에서 Endpoint 행을 잠그고 상태·원본 Body 합계·건수·수신률을 확인한다. DB 실패를 성공 접수로 표현하지 않으며 동시 요청이 건수/바이트 한도를 초과해 저장되지 않게 한다. Body 합계는 실제 DB 디스크 사용량이 아니다.
+- PUT /endpoints/:id/policy, POST /endpoints/:id/rotate-token, POST /endpoints/:id/cleanup, DELETE /endpoints/:id/requests, DELETE /endpoints/:id. URL 재발급은 기존 토큰으로 새로 승인되는 수신을 거부한다. 전체 이력/Endpoint 삭제는 미완료 Replay가 있으면 409이며 종료 Job/Attempt부터 정리해 FK 정합성을 유지한다. 원본이 삭제된 큐 ID의 늦은 전달은 작업을 수행하지 않는다.
+- API 프로세스에서 60초마다 cleanupExpired를 호출하고 CLI cleanup도 제공한다. advisory lock·SKIP LOCKED·쿼리별 5초 timeout으로 최대 20개 Endpoint × 100개 만료 요청을 처리한다. 원본을 참조하는 Job 또는 replayAttemptId가 있는 수신은 보관 기간이 지나도 보존하며 전체 이력 삭제에서 정리한다. 정책 변경은 기존 기록을 즉시 삭제하지 않지만 다음 sweep부터 적용한다.
+- 감사는 actorId/ownerId/action/대상 UUID/시각/허용된 정책·건수 metadata만 남긴다. 사용자·Endpoint·정책·응답 설정·Replay 생성/취소·삭제/정리를 해당 DB 변경과 같은 트랜잭션에 기록한다. 본문·공개 토큰·키/해시·요청 Header는 감사에 넣지 않는다. GET /audit는 소유권 범위와 Endpoint 선택, 30건 페이지다. 자동 정리에서 90일 초과 감사 최대 500개도 정리한다. DB 관리자의 변조까지 막는 감사 저장소는 아니다.
+- 보안/운영 UI는 사용자 키 발급·폐기, 정책·URL 교체·삭제·감사를 제공한다. 키는 메모리에만 유지하고 401에서 화면 데이터를 비운다. E2E는 RateLimit 응답의 남은 수를 확인해 운영 한도를 낮추거나 우회하지 않고 창 갱신을 기다린다. 공개 배포 전 확인 사항은 docs/SECURITY.md에 명시한다.
+
 ## Phase 6 Analytics 계약
-- GET /api/v1/dashboard/summary는 현재 관리자가 접근 가능한 전체 Endpoint, GET /api/v1/endpoints/:id/statistics는 검증한 Endpoint 하나만 집계한다. 모두 기존 ADMIN_KEY 인증과 관리 rate limit을 적용한다. 공개 토큰은 관리 인증에 사용하지 않는다. 현재 단일 관리자가 전체 Endpoint 권한을 갖는다.
+- GET /api/v1/dashboard/summary는 현재 관리자가 접근 가능한 전체 Endpoint, GET /api/v1/endpoints/:id/statistics는 검증한 Endpoint 하나만 집계한다. 모두 관리 키 인증과 rate limit을 적용한다. Phase 7에서 member의 전역 집계도 본인 소유권으로 제한하며 bootstrap 관리자만 전체 Endpoint 범위를 관리한다. 공개 토큰은 관리 인증에 사용하지 않는다.
 - query는 from/to만 허용하며 명시적 UTC/offset ISO 시각, from < to, 최대 31일이다. to 기본값은 조회 시각, from은 to 이전 24시간이다. 시작 포함·종료 미포함이며 임의/중복 key와 잘못된 범위를 400으로 거부한다. 요청 목록의 검색/페이지와 독립적이다.
 - PostgreSQL REPEATABLE READ READ ONLY 트랜잭션에서 전체/기간 건수·Method·예정 Status·출처·UTC 시간량·Endpoint 상위 10개·최근 수신/오류 각각 5개·처리시간을 같은 스냅샷으로 읽는다. SQL 파라미터 바인딩과 쿼리별 5초 statement_timeout을 적용한다. 조회 실패는 503이며 가짜 0건으로 대체하지 않는다.
 - endpointCount/allTimeRequests는 보관된 전체 범위, totals 및 분포는 조회 기간의 실제 수신 행이다. EXTERNAL/TEST/REPLAY 모두 포함하며 recentHourRequests는 조회 기간과 to 이전 1시간의 교집합이다. plannedErrorResponses는 예정 상태 >=400, parseErrors는 파싱 오류로 서로 겹칠 수 있다. 업무 성공률·실제 클라이언트 응답 성공률로 표현하지 않는다.

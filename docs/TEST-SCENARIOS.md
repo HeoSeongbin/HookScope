@@ -1,4 +1,4 @@
-# Phase 1–6 검증
+# Phase 1–7 검증
 
 ## 자동화
 1. Vitest/Supertest: 관리 인증, 생성 토큰, JSON 원본 바이트, 중복 Query, 비밀 헤더 마스킹, malformed JSON, GET/PUT/PATCH/DELETE, 256KiB 초과, DB 실패, 토큰/메서드 거부, 입력 검증, live/ready, Text/Form/Binary 파싱, 중복 헤더 및 프로토타입 키.
@@ -45,4 +45,11 @@ Docker Desktop 실행 후 README의 Compose 명령으로 전체 서비스를 올
 3. Compose Playwright: 실제 200/500/204 수신과 malformed JSON 바이트 전송→기간 건수/오류/차트→최근 오류 상세→빈 과거 기간과 전체 보관 건수 구분→최근 기간 복귀→다른 Endpoint 수신 격리→전체 Dashboard. 데스크톱/390px 모바일 스크린샷·가로 넘침 확인. 기존 7개 회귀도 유지.
 4. Compose frontend/backend/worker build 및 0005 index migration, ledger 재실행 전후 요청 467/작업 10/시도 14 유지 확인. 실제 DB smoke 총 5종, TypeScript/Lint/Production Build 검증.
 
-외부 전송·계정별 소유권·TTL·대규모 Analytics 부하·멀티 인스턴스·모든 강제 종료 시점 검증은 후속 대상이며 통과 처리하지 않는다.
+## Phase 7 추가 검증
+1. 단위/Supertest 더블: 운영 정책 경계/만료 offset/ownerId 입력 거부, 대소문자 변형을 포함한 타인 Endpoint·요청·응답 설정·Test Sender·Replay/시도/취소 접근 404, member 전역 Analytics owner 전달, 관리자 전용 계정 발급, 폐기/공개 키 인증 거부. 기존 137개와 총 168개.
+2. 실제 PostgreSQL·Redis·Socket Security smoke: 사용자 키 해시/만료/교체·비활성화, Endpoint 목록/상세/통계·요청·Replay와 Socket Room 격리, 키 폐기 연결 해제, 동일 멱등 생성 감사 1건 및 민감값 미포함, 동시 10요청/저장 한도 2건, Body/분당 한도, 20개 사용자 Endpoint quota와 1000개 Replay 작업 한도/기존 멱등 키 유지, 만료/중지/URL 재발급, Replay 원본 pin·대기 작업 삭제 거부·종료 graph 정리. 자체 사용자/Endpoint/큐/감사 fixture 정리.
+3. 실제 0006 migration 전후 Endpoint 87/요청 520/Job 12/Attempt 17 및 Raw/Parsed 지문 일치. 기존 Endpoint 87개의 owner bootstrap 및 retention null 유지.
+4. Compose E2E: 관리자 UI 키 발급→키 표시 닫기→별도 사용자 브라우저 로그인/본인 Endpoint만 표시→정책/수신 quota→비활성/만료→전체 이력 삭제/선택 상세 제거→URL 재발급→감사→Endpoint 삭제→계정 비활성화 후 로그인 화면 복귀. 데스크톱/390px 모바일 가로 넘침·키 미포함 스크린샷. 기존 8개 회귀 유지.
+5. 관리 IP 제한은 전체 suite에서도 실제로 적용한다. RateLimit 남은 수가 부족하면 consoleTest fixture가 5초 간격으로 다음 창을 기다린다. 한도를 높이거나 임시 인증 우회를 두지 않는다.
+
+외부 전송·공개 가입/세션·대규모 Analytics/cleanup 부하·멀티 인스턴스·모든 강제 종료 시점·실제 HTTPS 운영은 미검증이며 통과 처리하지 않는다. 상세 공개 배포 검토는 SECURITY.md 참조.

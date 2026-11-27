@@ -1,17 +1,29 @@
 import {randomUUID} from 'node:crypto';
 import {and,asc,desc,eq,inArray,sql,getTableColumns} from 'drizzle-orm';
 import {db,pool} from './db.js';
-import {replayJobs,replayAttempts,requests} from './schema.js';
+import {replayJobs,replayAttempts,requests,endpoints} from './schema.js';
 import {ReplayError,ReplayDeferred,terminalReplayStates,replayVerdict} from './replayPolicy.js';
+import {enforceCapturePolicy} from './capturePolicy.js';
+import {recordAudit} from './audit.js';
+import type {Principal} from './securityPolicy.js';
 import type {ReplayDelivery} from './replayTransport.js';
 
 export const replayRepository={
- async create(original:typeof requests.$inferSelect,key:string,maxAttempts:number,queueName:string){
-  const [inserted]=await db.insert(replayJobs).values({originalRequestId:original.id,endpointId:original.endpointId,idempotencyKey:key,maxAttempts,queueName}).onConflictDoNothing().returning();
-  const existing=inserted??(await db.select().from(replayJobs).where(eq(replayJobs.idempotencyKey,key)))[0];
+ async create(original:typeof requests.$inferSelect,key:string,maxAttempts:number,queueName:string,actor?:Principal){return db.transaction(async tx=>{
+  const [endpoint]=await tx.select().from(endpoints).where(eq(endpoints.id,original.endpointId)).for('update');
+  if(!endpoint)throw new ReplayError(404,'ENDPOINT_NOT_FOUND');
+  const [prior]=await tx.select().from(replayJobs).where(eq(replayJobs.idempotencyKey,key));
+  if(!prior){
+   const [{count}]=await tx.select({count:sql<number>`count(*)::int`}).from(replayJobs).where(eq(replayJobs.endpointId,endpoint.id));
+   if(count>=1000)throw new ReplayError(429,'REPLAY_JOB_QUOTA');
+   if(!(await tx.select({id:requests.id}).from(requests).where(eq(requests.id,original.id))).length)throw new ReplayError(404,'REQUEST_NOT_FOUND');
+  }
+  const [inserted]=await tx.insert(replayJobs).values({originalRequestId:original.id,endpointId:original.endpointId,idempotencyKey:key,maxAttempts,queueName}).onConflictDoNothing().returning();
+  const existing=inserted??(await tx.select().from(replayJobs).where(eq(replayJobs.idempotencyKey,key)))[0];
   if(!existing||existing.originalRequestId!==original.id||existing.maxAttempts!==maxAttempts||existing.queueName!==queueName)throw new ReplayError(409,'IDEMPOTENCY_KEY_CONFLICT');
+  if(inserted&&actor)await recordAudit(tx,actor,endpoint.ownerId,'REPLAY_CREATED',endpoint.id,{replayId:existing.id,maxAttempts});
   return existing;
- },
+ });},
  async job(id:string){return (await db.select().from(replayJobs).where(eq(replayJobs.id,id)))[0];},
  async attempts(id:string){return db.select({...getTableColumns(replayAttempts),captured:sql<boolean>`${requests.id} IS NOT NULL`}).from(replayAttempts).leftJoin(requests,eq(requests.id,replayAttempts.requestId)).where(eq(replayAttempts.jobId,id)).orderBy(asc(replayAttempts.number)).limit(3);},
  async attempt(id:string){return (await db.select().from(replayAttempts).where(eq(replayAttempts.id,id)))[0];},
@@ -30,11 +42,12 @@ export const replayRepository={
   await tx.update(replayAttempts).set({status:'UNKNOWN',errorCode:'QUEUE_PROCESSOR_INTERRUPTED',finishedAt:new Date()}).where(and(eq(replayAttempts.jobId,id),eq(replayAttempts.status,'RUNNING')));
   await tx.update(replayJobs).set({status:unknown?'UNKNOWN':'FAILED',lastError:'QUEUE_DELIVERY_EXHAUSTED',updatedAt:new Date()}).where(eq(replayJobs.id,id));
  });},
- async cancel(id:string){return db.transaction(async tx=>{
+ async cancel(id:string,actor?:Principal){return db.transaction(async tx=>{
   const [job]=await tx.select().from(replayJobs).where(eq(replayJobs.id,id)).for('update');
   if(!job)throw new ReplayError(404,'REPLAY_NOT_FOUND');
   if(job.status==='CANCELLED')return job;
   if(!['PENDING','QUEUED','RETRYING'].includes(job.status))throw new ReplayError(409,'REPLAY_NOT_CANCELLABLE');
+  if(actor){const [endpoint]=await tx.select().from(endpoints).where(eq(endpoints.id,job.endpointId));await recordAudit(tx,actor,endpoint.ownerId,'REPLAY_CANCELLED',endpoint.id,{replayId:id});}
   return (await tx.update(replayJobs).set({status:'CANCELLED',updatedAt:new Date(),lastError:null}).where(eq(replayJobs.id,id)).returning())[0];
  });},
  async start(id:string,queueName:string){return db.transaction(async tx=>{
@@ -68,6 +81,7 @@ export const replayRepository={
   if(existing)return {capture:existing,created:false};
   const [job]=await tx.select().from(replayJobs).where(eq(replayJobs.id,attempt.jobId));
   if(attempt.status!=='RUNNING'||job?.status!=='RUNNING'||job.endpointId!==data.endpointId)throw new ReplayError(409,'REPLAY_NOT_ACTIVE');
+  await enforceCapturePolicy(tx,data.endpointId,data.bodySize);
   const [capture]=await tx.insert(requests).values({...data,source:'REPLAY',replayAttemptId:attemptId}).returning();return {capture,created:true};
  });},
  async locked<T>(id:string,work:()=>Promise<T>){

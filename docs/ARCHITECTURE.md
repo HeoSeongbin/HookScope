@@ -1,4 +1,15 @@
-# Phase 1–6 아키텍처
+# Phase 1–7 아키텍처
+
+## Phase 7 신원·운영 경계
+securityPolicy.ts는 신원/정책 입력 계약, securityService.ts는 bootstrap/해시 사용자 키 인증·scoped Repository·관리 변경·감사를 담당한다. app.ts는 인증 전 IP 제한→신원 확인→사용자 제한→자원 소유권 확인→관리 handler 순서다. 공개 수신은 별도 토큰 경로를 유지한다. analyticsRepository의 owner 조건도 신원에서만 전달한다.
+
+capturePolicy.ts는 Endpoint 행 잠금 안에서 상태·소유자 활성·만료·최근 1분 건수·보관 건수·원본 Body 합계를 검사한다. 일반/TEST 저장과 Replay store가 같은 함수를 호출한다. audit.ts는 같은 DB 트랜잭션에 허용된 metadata만 쓴다. Replay 생성은 Endpoint 행 잠금 후 Job을 저장하여 이력 삭제와 경합해도 FK가 깨지지 않게 한다. 종료 Job 삭제→Attempt 정리→Request 삭제 순서를 유지하고 미완료 Job에서는 전체 삭제를 거부한다.
+
+retention.ts는 advisory lock, Endpoint SKIP LOCKED 및 20×100 제한 배치로 만료 요청을 정리한다. Job 원본/시도 수신은 pin한다. server.ts가 60초마다 호출하고 cleanup.ts CLI도 같은 함수를 사용한다. 90일 감사 정리는 배치 500개다. 기존 Endpoint retention null은 유지하고 신규만 7일 기본값이다.
+
+Socket은 handshake/구독/전달 시 신원을 확인한다. 사용자별 내부 Room으로 폐기된 키의 연결을 끊고 10초 재확인도 수행한다. 인증/권한 DB 조회 실패 시 발행하지 않는다. IP handshake Map은 1분·10000개로 제한한다. 기존 best-effort 저장 이후 알림 경계는 유지한다.
+
+SecurityCenter.tsx는 사용자 키 1회 표시·정책·URL 회전·전체 삭제·감사 UI다. 401에서 main.tsx는 키·Endpoint·상세·검색 등 화면 상태를 비운다. explicit 삭제 이후 기존 상세도 제거한다. consoleTest.ts는 운영 RateLimit 창을 지키며 테스트를 실행한다. 서버 한도를 테스트용으로 완화하지 않는다.
 
 ## Phase 6 Analytics 경계
 analyticsPolicy.ts는 최대 31일의 from/to 검증과 서버 응답 계약, analyticsRepository.ts는 metadata만 반환하는 동일 스냅샷 PostgreSQL 집계를 담당한다. app.ts는 기존 관리 인증 후 전역 Dashboard 또는 검증한 Endpoint 하나를 전달하며 server.ts에서 실제 Repository를 주입한다. 수신·저장·Socket·Replay 실행 경로에 집계 쓰기를 추가하지 않는다.

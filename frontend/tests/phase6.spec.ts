@@ -1,4 +1,4 @@
-import {test,expect} from '@playwright/test';
+import {test,expect} from './consoleTest';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 const key=readFileSync(new URL('../../.env',import.meta.url),'utf8').match(/^ADMIN_KEY=(.+)$/m)![1].trim();

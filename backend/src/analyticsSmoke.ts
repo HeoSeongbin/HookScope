@@ -16,6 +16,7 @@ async function create(){const response=await fetch(base+'/api/v1/endpoints',{met
 async function stats(endpointId?:string,query=range){const response=await fetch(base+(endpointId?`/api/v1/endpoints/${endpointId}/statistics`:'/api/v1/dashboard/summary')+'?'+query,{headers});assert.equal(response.status,200);return await response.json() as AnalyticsResult;}
 try{
  const a=await create(),b=await create(),empty=await create();
+ await pool.query('UPDATE webhook_endpoints SET retention_days=NULL WHERE id=ANY($1::uuid[])',[ids]);
  const captures:string[]=[];
  // Actual ingestion followed by explicit metadata fixtures gives deterministic boundary tests.
  for(const [endpoint,method,body] of [[a,'POST','{"ok":true}'],[a,'GET',null],[a,'POST','{broken'],[a,'PATCH','end boundary'],[a,'POST','before boundary'],[b,'PUT','foreign']] as const){

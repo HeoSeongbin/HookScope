@@ -1,7 +1,34 @@
-# 개발 상태 — 2026-11-25
+# 개발 상태 — 2026-11-27
 
 ## 현재 Phase
-**Phase 0–6 구현·검증 완료. 다음 미완료 단계는 Phase 7이다.** 로컬 개발용 단일 관리자 MVP이며 공개 운영 준비 완료를 의미하지 않는다. 과거 Phase의 검증 기록은 이력으로 유지한다.
+**Phase 0–7 구현·검증 완료. 다음 미완료 단계는 Phase 8이다.** 관리자 발급 사용자 키를 사용하는 로컬 Compose 플랫폼이며 공개 운영 준비 완료를 의미하지 않는다. 과거 Phase의 검증 기록은 이력으로 유지한다.
+
+## Phase 7 구현 및 검증 (2026-11-27)
+- 필수 문서·원문 Phase 7·소스·Git 비교: 기준 34b4b6f(Phase 6), 작업 전 변경 없음. Phase 6의 커밋 전 문구는 당시 이력이며 이후 사용자 요청으로 푸시됐다. 이번 Phase는 아직 커밋·푸시하지 않았다. 시작 기준 테스트 137개 통과.
+- 영향 분석: 기존 수신/Raw·Parsed/저장 이후 알림/자체 HTTP/Replay/Analytics를 유지하고 신원·소유권·정책 검사만 경계에 추가했다. 관리자 ADMIN_KEY를 bootstrap 신원에 연결하고 일반 사용자 키(256bit 난수·SHA-256 저장·30일 만료·1회 반환)를 관리자만 발급한다. 공개 가입/비밀번호/쿠키 세션은 범위 밖이다.
+- REST 목록/상세·응답 설정·Test Sender·Replay/시도/취소·전역/Endpoint 통계·감사에 같은 소유권을 적용. ownerId/role 입력으로 권한을 바꿀 수 없고 타인 자원은 404다. Socket handshake/가입/전달의 DB 신원/소유권 확인, 폐기 연결 해제 및 10초 재확인 구현. 401에서 화면 신원/데이터/검색 상태를 비운다.
+- 인증 전 관리 IP 300/분, 사용자 300/분, Socket handshake IP 120/분·Map 최대 10000개, 기존 수신 IP 한도 유지. Endpoint 수신 한도는 DB 행 잠금으로 일반/TEST/REPLAY에 함께 집행한다. 사용자 Endpoint 20개/관리자 1000개, Endpoint 기본 10000건·원본 Body 64MiB 한도와 Replay 작업 최대 1000개를 적용한다. 한도 도달 후에도 기존 멱등 키 재조회는 유지한다.
+- Endpoint 만료·활성화·보관·한도 API/UI, 수신 URL 재발급, 전체 이력/Endpoint 삭제. 미완료 Replay가 있으면 삭제를 409로 거부하고 종료 graph는 Job/Attempt→Request 순서로 정리한다. Body 합계와 실제 DB 디스크 사용량을 구분한다.
+- 60초 주기/수동/CLI 보관 정리, advisory lock·SKIP LOCKED·최대 20×100 요청 배치. 모든 Replay 원본/시도 수신은 pin하여 관계 이력을 보존한다. 감사는 동일 변경 트랜잭션 안에서 metadata만 기록하고 90일 초과 최대 500개를 정리한다.
+- **0006 migration 전후 Endpoint 87개·요청 520건·Replay Job 12개·Attempt 17개 및 Raw/Parsed 지문 일치.** 기존 Endpoint 87개를 bootstrap에 연결하고 retention null 유지. 신규 기본값만 7일이다. 최종 재실행에서도 **117/680/18/26** 및 지문 일치. 후자는 E2E fixture가 추가된 당시 수치다.
+- **Vitest 168/168 통과:** 기존 137개 + 운영 정책/잘못된 offset·범위·권한 입력, 타인 자원 거부, member 통계 범위·계정 권한/경로 대소문자 변형 31개. API Repository 더블과 실제 DB 검증을 구분한다.
+- **실제 Compose DB smoke 6종 통과:** 기존 수신→DB→Socket·필터·응답/Test Sender·Replay·Analytics 회귀와 Security smoke. Security는 키 해시/만료/폐기·계정 중지, REST/Socket/Replay/Analytics 격리, 멱등 감사 1건과 민감값 미포함, 동시 10개 중 quota 2개만 저장, Body/분당/사용자 Endpoint 및 1000개 Replay quota, 만료·URL 교체·pin/삭제 graph를 확인하고 자기 fixture를 정리했다.
+- **실제 자동 정리 관측 통과:** 독립 테스트 Endpoint의 2일 경과 요청과 91일 경과 감사 metadata가 Compose의 실제 60초 타이머에서 정리됨을 확인했다. 테스트 Endpoint와 새 감사 metadata는 정리했다.
+- **Compose Playwright 9/9 통과:** 기존 8개 + 관리자 UI 키 발급/표시 닫기→별도 member 로그인/소유 목록→운영 정책/수신 quota→만료/중지→이력 삭제/상세 비움→URL 교체→감사→Endpoint 삭제→계정 중지 후 로그인 복귀. 데스크톱/390px 모바일 넘침 확인 및 키 없는 화면 검토. E2E는 실제 fixture를 남긴다.
+- TypeScript·ESLint·Production Build 및 Compose build/migration/기동 통과, 5개 서비스 healthy. npm audit 전체/운영 모두 0건, 새 의존성 없음. CI에 security smoke 추가. 원격 CI·실제 HTTPS·백업 복구·대규모 부하·멀티 인스턴스는 미검증이며 SECURITY.md에서 공개 배포 점검을 구분했다.
+
+## Phase 7에서 해결한 문제
+- 최종 검토에서 Express의 대소문자 비구분 라우팅과 소문자 전용 권한 경로 검사 사이의 차이를 발견했다. 대소문자를 섞은 Replay/Request/Endpoint 경로 5개가 404 대신 200/202를 반환하는 회귀를 먼저 재현하고 검사도 같은 case-insensitive 규칙으로 수정했다. 수정 후 168개 테스트가 통과했다.
+- 종료된 Docker Desktop을 CLI로 시작하고 실제 PostgreSQL/Redis에서 검증했다.
+- 새 소유권 Repository의 Drizzle query-builder 타입을 일반 async 반환으로 맞춰 타입 불일치를 해결했다. 스모크의 Socket 이벤트 Promise와 Buffer Body 타입도 실제 인터페이스에 맞췄다.
+- 전 구간 브라우저 suite가 공유 proxy IP 관리 한도를 소진하여 후반 테스트가 429를 받았다. 운영 한도를 늘리지 않고 RateLimit 헤더/consoleTest fixture로 예산을 확인하도록 수정했다. 일시적 계정 조회 실패도 UI에서 재확인할 수 있게 했다.
+- Text 본문 테스트가 Content-Type 없이 Binary로 저장돼 Text Inspector 기대와 맞지 않았다. 명시적인 text/plain 전송으로 수정했다. 과거 시각을 설정하는 Analytics fixture는 자기 Endpoint의 보관을 null로 고정해 배경 정리와 경쟁하지 않게 했다.
+
+## Phase 7 변경 파일
+- migrations/0006_security_and_operations.sql; backend/src/securityPolicy.ts/securityService.ts/capturePolicy.ts/audit.ts/retention.ts/cleanup.ts/securitySmoke.ts 및 tests/security.test.ts 신규.
+- backend/src/app.ts/repository.ts/schema.ts/realtime.ts/server.ts/replayService.ts/replayRepository.ts/analyticsPolicy.ts/analyticsRepository.ts/analyticsSmoke.ts/package.json, CI 수정.
+- frontend/src/SecurityCenter.tsx, tests/consoleTest.ts/phase7.spec.ts 신규; main.tsx/types.ts/style.css 및 기존 E2E fixture import 수정. Phase 7 화면 신규 및 이전 E2E 화면 재생성.
+- PROJECT.md/README.md/PROGRESS.md/DECISIONS.md/ARCHITECTURE.md/TEST-SCENARIOS.md/openapi.yaml 갱신, SECURITY.md 신규. .env는 제외하고 커밋·푸시는 하지 않았다.
 
 ## Phase 6 구현 및 검증 (2026-11-25)
 - 필수 문서·원문 Phase 6 요구·실제 소스·Git 비교: 기준 9e118e9(Phase 5), 작업 전 변경 없음. 과거 Phase 5 커밋 전 문구는 당시 이력이며 이후 사용자 요청으로 9e118e9를 푸시했다. 이번 작업은 아직 커밋·푸시하지 않았다.

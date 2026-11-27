@@ -1,9 +1,19 @@
 import { pgTable, uuid, text, boolean, timestamp, integer, jsonb, index,uniqueIndex,type AnyPgColumn } from 'drizzle-orm/pg-core';
+export const users=pgTable('management_users',{
+ id:uuid('id').primaryKey().defaultRandom(),name:text('name').notNull(),role:text('role').notNull().default('MEMBER'),
+ keyHash:text('key_hash').unique(),enabled:boolean('enabled').notNull().default(true),keyExpiresAt:timestamp('key_expires_at',{withTimezone:true}),createdAt:timestamp('created_at',{withTimezone:true}).notNull().defaultNow()
+});
+export const auditLogs=pgTable('audit_logs',{
+ id:uuid('id').primaryKey().defaultRandom(),actorId:uuid('actor_id').notNull().references(()=>users.id),ownerId:uuid('owner_id').notNull().references(()=>users.id),
+ action:text('action').notNull(),targetId:uuid('target_id'),details:jsonb('details').notNull().default({}),createdAt:timestamp('created_at',{withTimezone:true}).notNull().defaultNow()
+},t=>[index('audit_owner_time_idx').on(t.ownerId,t.createdAt),index('audit_created_time_idx').on(t.createdAt)]);
 export const endpoints = pgTable('webhook_endpoints', {
   id: uuid('id').primaryKey().defaultRandom(), name: text('name').notNull(),
   publicToken: text('public_token').notNull().unique(), enabled: boolean('enabled').notNull().default(true),
-  createdAt: timestamp('created_at', {withTimezone:true}).notNull().defaultNow()
-});
+  createdAt: timestamp('created_at', {withTimezone:true}).notNull().defaultNow(),
+  ownerId:uuid('owner_id').notNull().default('00000000-0000-4000-8000-000000000001').references(()=>users.id),expiresAt:timestamp('expires_at',{withTimezone:true}),
+  retentionDays:integer('retention_days').default(7),rateLimitPerMinute:integer('rate_limit_per_minute').notNull().default(120),maxRequests:integer('max_requests').notNull().default(10000),maxBodyStorageBytes:integer('max_body_storage_bytes').notNull().default(67108864)
+},t=>[index('endpoints_owner_idx').on(t.ownerId)]);
 export const requests = pgTable('webhook_requests', {
   id: uuid('id').primaryKey().defaultRandom(), endpointId: uuid('endpoint_id').notNull().references(()=>endpoints.id,{onDelete:'cascade'}),
   method:text('method').notNull(), path:text('path').notNull(), query:jsonb('query').notNull(),

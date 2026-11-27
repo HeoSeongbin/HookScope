@@ -20,4 +20,4 @@ export type AnalyticsResult={
  recentRequests:AnalyticsCapture[];recentErrors:AnalyticsCapture[];
  replay:{attempts:number;timedAttempts:number;avgDurationMs:number|null;p95DurationMs:number|null;statuses:{status:string;count:number}[]};
 };
-export interface AnalyticsRepository {read(range:AnalyticsRange,endpointId?:string):Promise<AnalyticsResult>}
+export interface AnalyticsRepository {read(range:AnalyticsRange,endpointId?:string,ownerId?:string):Promise<AnalyticsResult>}
